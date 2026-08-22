@@ -17,6 +17,18 @@ import { chain, TASK_POOL, taskPoolAbi } from "@/lib/contracts";
 
 const RPC = process.env.RPC_URL || chain.rpcUrls.default.http[0];
 
+// A NEXT_PUBLIC_ prefix tells Next to inline the value into the browser
+// bundle. On a private key that hands the relayer's wallet to every visitor,
+// and it is an easy mistake to make while filling in a deploy form -- so fail
+// loudly at build time rather than quietly leaking.
+if (process.env.NEXT_PUBLIC_RELAYER_PRIVATE_KEY) {
+  throw new Error(
+    "NEXT_PUBLIC_RELAYER_PRIVATE_KEY is set. The NEXT_PUBLIC_ prefix ships a " +
+      "value to every browser; rename it to RELAYER_PRIVATE_KEY and rotate " +
+      "the key, because it has already been published."
+  );
+}
+
 // A single EOA submitting hundreds of concurrent transactions will collide on
 // nonces unless they are handed out in order. viem's nonce manager serialises
 // allocation in-process. Past a few hundred transactions per minute the right
