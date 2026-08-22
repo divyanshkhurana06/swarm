@@ -476,10 +476,19 @@ contract TaskPoolTest is Test {
         return (uint64(x) << 48) | (uint64(y) << 32) | (uint64(w) << 16) | uint64(h);
     }
 
+    function _one(uint64 box) internal pure returns (uint64[] memory a) {
+        a = new uint64[](1);
+        a[0] = box;
+    }
+
     function _drawBox(uint256 pk, uint256 task, uint256 item, uint64 box) internal {
+        _drawBoxes(pk, task, item, _one(box));
+    }
+
+    function _drawBoxes(uint256 pk, uint256 task, uint256 item, uint64[] memory bs) internal {
         address who = vm.addr(pk);
-        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(pk, pool.boxDigest(task, item, box));
-        pool.submitBoxFor(task, item, box, who, abi.encodePacked(r, sg, v));
+        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(pk, pool.boxDigest(task, item, bs));
+        pool.submitBoxesFor(task, item, bs, who, abi.encodePacked(r, sg, v));
     }
 
     function test_Box_IsStoredAndPaidFirstCome() public {
@@ -489,7 +498,7 @@ contract TaskPoolTest is Test {
         _drawBox(PK_A, id, 0, box);
 
         bytes32 wid = pool.idOfAddress(vm.addr(PK_A));
-        assertEq(pool.boxOf(id, 0, wid), box, "the box itself is recorded");
+        assertEq(pool.boxesOf(id, 0, wid)[0], box, "the box itself is recorded");
         assertEq(pool.earned(wid), REWARD, "a bounty pays on submission");
     }
 
@@ -498,7 +507,7 @@ contract TaskPoolTest is Test {
         _drawBox(PK_A, id, 0, 0);
 
         bytes32 wid = pool.idOfAddress(vm.addr(PK_A));
-        assertEq(pool.boxOf(id, 0, wid), 0);
+        assertEq(pool.boxesOf(id, 0, wid).length, 0, "no boxes recorded");
         // "There is no car in this image" is a real answer and worth paying
         // for; not paying it would teach workers to invent boxes.
         assertEq(pool.earned(wid), REWARD, "an honest negative is paid");
@@ -508,11 +517,11 @@ contract TaskPoolTest is Test {
     function test_Box_RevertWhen_CoordinatesAreTamperedWith() public {
         uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 1);
         address who = vm.addr(PK_A);
-        uint64 signed = _pack(10, 10, 100, 100);
-        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(PK_A, pool.boxDigest(id, 0, signed));
+        (uint8 v, bytes32 r, bytes32 sg) =
+            vm.sign(PK_A, pool.boxDigest(id, 0, _one(_pack(10, 10, 100, 100))));
 
         vm.expectRevert(TaskPool.BadSignature.selector);
-        pool.submitBoxFor(id, 0, _pack(50, 50, 900, 900), who, abi.encodePacked(r, sg, v));
+        pool.submitBoxesFor(id, 0, _one(_pack(50, 50, 900, 900)), who, abi.encodePacked(r, sg, v));
     }
 
     function test_Box_ClosesTheItemAtQuorum() public {
@@ -520,12 +529,62 @@ contract TaskPoolTest is Test {
         _drawBox(PK_A, id, 0, _pack(1, 2, 3, 4));
 
         address who = vm.addr(PK_B);
-        uint64 box = _pack(5, 6, 7, 8);
-        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(PK_B, pool.boxDigest(id, 0, box));
+        uint64[] memory bs = _one(_pack(5, 6, 7, 8));
+        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(PK_B, pool.boxDigest(id, 0, bs));
 
         // First come, first served: the bounty on this image is gone.
         vm.expectRevert(TaskPool.ItemFull.selector);
-        pool.submitBoxFor(id, 0, box, who, abi.encodePacked(r, sg, v));
+        pool.submitBoxesFor(id, 0, bs, who, abi.encodePacked(r, sg, v));
+    }
+
+    function test_Box_SeveralBoxesOnOneImage() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 1);
+        uint64[] memory three = new uint64[](3);
+        three[0] = _pack(100, 100, 500, 500);
+        three[1] = _pack(2000, 1500, 800, 600);
+        three[2] = _pack(6000, 3000, 900, 700);
+
+        _drawBoxes(PK_A, id, 0, three);
+
+        bytes32 wid = pool.idOfAddress(vm.addr(PK_A));
+        uint64[] memory stored = pool.boxesOf(id, 0, wid);
+        // A street scene holds more than one car; one box per image would
+        // force the worker to pick a favourite and short the requester.
+        assertEq(stored.length, 3, "every box is kept");
+        assertEq(stored[1], three[1]);
+        assertEq(pool.earned(wid), REWARD, "still one payment for the image");
+    }
+
+    function test_Receipt_RecordsThisTaskNotTheCareer() public {
+        WorkReceipt receipts = pool.receipts();
+        address who = vm.addr(PK_A);
+
+        uint256 first = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 1);
+        _drawBox(PK_A, first, 0, _pack(1, 1, 100, 100));
+        _drawBox(PK_A, first, 1, _pack(1, 1, 100, 100));
+
+        uint256 second = _postTask(1_000_000, 1, TaskPool.Mode.FirstCome, 1);
+        _drawBox(PK_A, second, 0, _pack(1, 1, 100, 100));
+
+        (uint128 a1, uint64 n1,) = receipts.receiptOf(1);
+        (uint128 a2, uint64 n2,) = receipts.receiptOf(2);
+
+        assertEq(a1, REWARD * 2, "first receipt: what the first task paid");
+        assertEq(n1, 2);
+        // The second must not read as the running total; it is a receipt for
+        // one job, not a statement of the account.
+        assertEq(a2, REWARD, "second receipt: only the second task");
+        assertEq(n2, 1);
+
+        assertEq(receipts.kindOf(1), "Image bounty", "says what the work was");
+    }
+
+    function test_Receipt_SaysSurveyForSurveys() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.Survey, 1);
+        _answerSurvey(PK_A, id, 0, "one");
+        _answerSurvey(PK_A, id, 1, "two");
+
+        assertEq(pool.receipts().kindOf(1), "Survey");
     }
 
     function test_Box_ParticipantsAreTrackedForExport() public {
@@ -550,11 +609,11 @@ contract TaskPoolTest is Test {
         ids[0] = pool.idOfAddress(vm.addr(PK_A));
         ids[1] = pool.idOfAddress(vm.addr(PK_B));
 
-        uint64[] memory out = pool.boxes(id, ids);
+        uint32[] memory out = pool.boxCounts(id, ids);
         assertEq(out.length, 4, "two workers x two items");
-        assertEq(out[0], _pack(100, 200, 300, 400));
-        assertEq(out[1], _pack(500, 500, 500, 500));
-        assertEq(out[2], _pack(110, 210, 310, 410));
+        assertEq(out[0], 1);
+        assertEq(out[1], 1);
+        assertEq(out[2], 1);
         assertEq(out[3], 0, "worker B never answered item 1");
     }
 

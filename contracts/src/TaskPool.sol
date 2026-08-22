@@ -139,6 +139,12 @@ contract TaskPool {
     /// @notice Completion receipts already minted, so a task mints once.
     mapping(uint256 taskId => mapping(bytes32 workerId => bool)) public receiptMinted;
 
+    /// @notice What a worker earned on one particular task.
+    /// @dev `earned` is a lifetime figure, which is the wrong number to stamp
+    ///      on a receipt: every receipt would show the running total and the
+    ///      second one would look like it paid more than the job was worth.
+    mapping(uint256 taskId => mapping(bytes32 workerId => uint256)) public earnedIn;
+
     /// @notice Surveys already paid out, so completion pays exactly once.
     mapping(uint256 taskId => mapping(bytes32 workerId => bool)) public surveyPaid;
 
@@ -147,8 +153,8 @@ contract TaskPool {
     ///      than pixels, so a box drawn on a phone still lines up when the
     ///      requester views it on a monitor. Zero means "nothing here", which
     ///      is a real answer and worth paying for.
-    mapping(uint256 taskId => mapping(uint256 itemId => mapping(bytes32 workerId => uint64)))
-        public boxOf;
+    mapping(uint256 taskId => mapping(uint256 itemId => mapping(bytes32 workerId => uint64[])))
+        internal _boxesOf;
 
     /// @notice Everyone who completed a survey.
     /// @dev Without this a requester cannot enumerate the responses they paid
@@ -496,7 +502,12 @@ contract TaskPool {
         if (bytes32(uint256(uint160(to))) != workerId) return; // passkey identity
 
         receiptMinted[taskId][workerId] = true;
-        uint256 id = receipts.mint(to, earned[workerId], answersBy[workerId]);
+        uint256 id = receipts.mint(
+            to,
+            earnedIn[taskId][workerId],
+            answeredCount[taskId][workerId],
+            _tasks[taskId].mode == Mode.Survey ? "Survey" : "Image bounty"
+        );
         emit ReceiptMinted(taskId, workerId, id);
     }
 
@@ -528,6 +539,7 @@ contract TaskPool {
 
         t.paidOut += uint128(amount);
         earned[workerId] += amount;
+        earnedIn[taskId][workerId] += amount;
         unchecked {
             totalPaid += amount;
         }
@@ -573,7 +585,7 @@ contract TaskPool {
         address self = address(uint160(uint256(workerId)));
         bool isAddressIdentity = bytes32(uint256(uint160(self))) == workerId;
         if (!isAddressIdentity) {
-            receiptId = receipts.mint(to, amount, answersBy[workerId]);
+            receiptId = receipts.mint(to, amount, answersBy[workerId], "Cash-out");
         }
 
         emit Withdrawn(workerId, to, amount, receiptId);
@@ -750,31 +762,45 @@ contract TaskPool {
     }
 
     bytes32 private constant BOX_TYPEHASH =
-        keccak256("Box(uint256 taskId,uint256 itemId,uint64 box)");
+        keccak256("Box(uint256 taskId,uint256 itemId,bytes32 boxesHash)");
 
-    function boxDigest(uint256 taskId, uint256 itemId, uint64 box)
+    /// @dev Signed over a hash of the whole set, so a relayer cannot drop or
+    ///      add a box on the way through.
+    function boxDigest(uint256 taskId, uint256 itemId, uint64[] calldata boxes_)
         public
         view
         returns (bytes32)
     {
         return EIP712.digest(
-            domainSeparator(), keccak256(abi.encode(BOX_TYPEHASH, taskId, itemId, box))
+            domainSeparator(),
+            keccak256(
+                abi.encode(BOX_TYPEHASH, taskId, itemId, keccak256(abi.encodePacked(boxes_)))
+            )
         );
+    }
+
+    /// @notice Every box a worker drew on one image.
+    function boxesOf(uint256 taskId, uint256 itemId, bytes32 workerId)
+        external
+        view
+        returns (uint64[] memory)
+    {
+        return _boxesOf[taskId][itemId][workerId];
     }
 
     /// @notice Mark where the thing is, not just whether it is there.
     /// @dev Runs through the same accounting as a yes/no answer -- a non-zero
     ///      box counts as "found it", zero as "nothing here" -- so bounties
     ///      inherit first-come payment and the completion receipt for free.
-    function submitBoxFor(
+    function submitBoxesFor(
         uint256 taskId,
         uint256 itemId,
-        uint64 box,
+        uint64[] calldata boxes_,
         address worker,
         bytes calldata signature
     ) external {
         if (worker == address(0)) revert NotRegistered();
-        if (EIP712.recover(boxDigest(taskId, itemId, box), signature) != worker) {
+        if (EIP712.recover(boxDigest(taskId, itemId, boxes_), signature) != worker) {
             revert BadSignature();
         }
 
@@ -787,21 +813,27 @@ contract TaskPool {
             emit WorkerRegistered(workerId, uint256(uint160(worker)), 0);
         }
 
-        boxOf[taskId][itemId][workerId] = box;
-        _credit(taskId, itemId, box == 0 ? 0 : 1, workerId);
+        // An image can hold several cars. One box per image would force a
+        // worker to either pick a favourite or leave money on the table for
+        // the requester, and neither produces the dataset that was asked for.
+        for (uint256 i = 0; i < boxes_.length; i++) {
+            if (boxes_[i] != 0) _boxesOf[taskId][itemId][workerId].push(boxes_[i]);
+        }
+
+        _credit(taskId, itemId, _boxesOf[taskId][itemId][workerId].length == 0 ? 0 : 1, workerId);
     }
 
-    /// @notice Every box drawn on a task, for export.
-    function boxes(uint256 taskId, bytes32[] calldata workerIds)
+    /// @notice How many boxes each worker drew on each item, for export.
+    function boxCounts(uint256 taskId, bytes32[] calldata workerIds)
         external
         view
-        returns (uint64[] memory out)
+        returns (uint32[] memory out)
     {
         uint256 n = itemCount[taskId];
-        out = new uint64[](n * workerIds.length);
+        out = new uint32[](n * workerIds.length);
         for (uint256 w = 0; w < workerIds.length; w++) {
             for (uint256 i = 0; i < n; i++) {
-                out[w * n + i] = boxOf[taskId][i][workerIds[w]];
+                out[w * n + i] = uint32(_boxesOf[taskId][i][workerIds[w]].length);
             }
         }
     }

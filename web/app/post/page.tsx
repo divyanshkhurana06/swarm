@@ -8,7 +8,7 @@ import { DUSD_DECIMALS, explorerTx } from "@/lib/contracts";
 import { signPostTask, type SigningWallet } from "@/lib/wallet";
 import { publicClient, tasksBy, type Task } from "@/lib/tasks";
 import { extractPdfText, looksLikeQuestion, splitIntoQuestions } from "@/lib/survey";
-import { prepareImage, estimateGas, MAX_BYTES_PER_IMAGE } from "@/lib/images";
+import { prepareImage, pdfToImages, estimateGas, MAX_BYTES_PER_IMAGE } from "@/lib/images";
 import { Shell, Field, Input, WalletBar } from "@/components/ui";
 
 /**
@@ -162,11 +162,21 @@ function PostTask() {
     setExtracting(true);
     try {
       const prepared: { dataUri: string; name: string }[] = [];
+
+      // Flatten a PDF into its pages first, so one file can seed a whole batch.
+      const expanded: { dataUri: string; bytes: number; name: string }[] = [];
       for (const f of files) {
-        const img = await prepareImage(f);
+        if (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")) {
+          expanded.push(...(await pdfToImages(f)));
+        } else {
+          expanded.push(await prepareImage(f));
+        }
+      }
+
+      for (const img of expanded) {
         if (img.bytes > MAX_BYTES_PER_IMAGE) {
           setError(
-            `${f.name} is still ${Math.round(img.bytes / 1000)}KB after shrinking — try a simpler photo.`
+            `${img.name} is still ${Math.round(img.bytes / 1000)}KB after shrinking — try a simpler image.`
           );
           continue;
         }
@@ -422,10 +432,11 @@ function PostTask() {
               disabled={extracting}
               className="rounded-xl border border-zinc-700 px-4 py-2.5 text-sm font-medium disabled:opacity-40"
             >
-              {extracting ? "Shrinking…" : "Upload JPG / PNG"}
+              {extracting ? "Shrinking…" : "Upload JPG / PNG / PDF"}
             </button>
             <span className="text-xs text-zinc-600">
-              Stored on-chain, so they&apos;re downscaled hard
+              A PDF becomes one image per page. Stored on-chain, so all of
+              them are downscaled hard.
             </span>
           </div>
           {uploaded.length > 0 && (
@@ -453,7 +464,7 @@ function PostTask() {
           <input
             ref={fileRef}
             type="file"
-            accept="image/jpeg,image/png"
+            accept="image/jpeg,image/png,application/pdf"
             multiple
             className="hidden"
             onChange={(e) => {

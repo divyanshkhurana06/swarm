@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { formatUnits, type Hex } from "viem";
 import { chain, TASK_POOL, taskPoolAbi, DUSD_DECIMALS, explorerTx } from "@/lib/contracts";
-import { signBox, signLabel, signSurveyAnswer, type SigningWallet } from "@/lib/wallet";
+import { signBoxes, signLabel, signSurveyAnswer, type SigningWallet } from "@/lib/wallet";
 import { packBox, type Box } from "@/lib/images";
 import { BoxDrawer } from "@/components/BoxDrawer";
 import {
@@ -76,7 +76,7 @@ function Worker() {
   const [cursor, setCursor] = useState(0);
   const [earned, setEarned] = useState<bigint>(0n);
   const [text, setText] = useState("");
-  const [box, setBox] = useState<Box | null>(null);
+  const [boxes, setBoxes] = useState<Box[]>([]);
   const [pops, setPops] = useState<Pop[]>([]);
   const [bump, setBump] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -134,7 +134,7 @@ function Worker() {
     let cancelled = false;
     setQueue(null);
     setText("");
-    setBox(null);
+    setBoxes([]);
     unansweredItems(task, workerId).then((items) => {
       if (cancelled) return;
       setQueue(items);
@@ -176,7 +176,7 @@ function Worker() {
   const advance = (reward: bigint, credited: boolean) => {
     setCursor((c) => c + 1);
     setText("");
-    setBox(null);
+    setBoxes([]);
     setStreak((v) => v + 1);
 
     if (credited) {
@@ -187,7 +187,7 @@ function Worker() {
   };
 
   const submit = useCallback(
-    async (value: number | string | Box | null) => {
+    async (value: number | string | Box[]) => {
       if (!wallet || !address || !task || !queue || busy) return;
       const item = queue[cursor];
       if (!item) return;
@@ -203,8 +203,8 @@ function Worker() {
         let body: Record<string, unknown>;
 
         if (isBox) {
-          const packed = packBox(value as Box | null);
-          const signature = await signBox(
+          const packed = (value as Box[]).map((b) => packBox(b));
+          const signature = await signBoxes(
             wallet as unknown as SigningWallet,
             BigInt(task.id),
             BigInt(item.id),
@@ -214,7 +214,7 @@ function Worker() {
             action: "boxFor",
             taskId: String(task.id),
             itemId: String(item.id),
-            box: packed.toString(),
+            boxes: packed.map((b) => b.toString()),
             worker: address,
             signature,
           };
@@ -462,8 +462,8 @@ function Worker() {
             <BoxDrawer
               key={item.id}
               src={item.text}
-              box={box}
-              onChange={setBox}
+              boxes={boxes}
+              onChange={setBoxes}
               disabled={busy}
             />
           ) : isImage ? (
@@ -491,14 +491,18 @@ function Worker() {
           {isBox ? (
             <div className="space-y-3">
               <button
-                onClick={() => submit(box)}
-                disabled={busy || !box}
+                onClick={() => submit(boxes)}
+                disabled={busy || boxes.length === 0}
                 className="w-full rounded-2xl bg-emerald-500 py-4 text-lg font-semibold text-zinc-950 disabled:opacity-40"
               >
-                {busy ? "Signing…" : box ? "Claim bounty" : "Draw a box first"}
+                {busy
+                  ? "Signing…"
+                  : boxes.length === 0
+                    ? "Draw a box first"
+                    : `Claim bounty · ${boxes.length} box${boxes.length > 1 ? "es" : ""}`}
               </button>
               <button
-                onClick={() => submit(null)}
+                onClick={() => submit([])}
                 disabled={busy}
                 className="w-full rounded-xl border border-zinc-700 py-3 text-sm text-zinc-400 disabled:opacity-40"
               >

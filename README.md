@@ -8,9 +8,9 @@ Built at [Monad Blitz Hyderabad V3](https://blitz.devnads.com/events/monad-blitz
 
 - **Live demo:** _TODO — add the deployed URL_
 - **Projector dashboard:** _TODO — `<url>/dashboard`_
-- **TaskPool (Monad Testnet):** [`0x61e473CAb8A64A3a27744b3D3b8b3C3bd04A613c`](https://testnet.monadvision.com/address/0x61e473CAb8A64A3a27744b3D3b8b3C3bd04A613c) — verified
-- **DemoUSD (Monad Testnet):** [`0x4E3Ca07a3eF826de75BF4C78cc3Fb75dD357408E`](https://testnet.monadvision.com/address/0x4E3Ca07a3eF826de75BF4C78cc3Fb75dD357408E) — verified
-- **WorkReceipt NFT (Monad Testnet):** [`0x6a6DAdB69203C5FCAD19cb7266f1DD523a333aDf`](https://testnet.monadvision.com/address/0x6a6DAdB69203C5FCAD19cb7266f1DD523a333aDf) — verified
+- **TaskPool (Monad Testnet):** [`0x74F2b1C5eCb400c31596dC5CA993f909F083A6d0`](https://testnet.monadvision.com/address/0x74F2b1C5eCb400c31596dC5CA993f909F083A6d0) — verified
+- **DemoUSD (Monad Testnet):** [`0x5E47E70679811F5720338237066e3e57D71a449C`](https://testnet.monadvision.com/address/0x5E47E70679811F5720338237066e3e57D71a449C) — verified
+- **WorkReceipt NFT (Monad Testnet):** [`0xE2cBB61a976294a31756D0483e00dDbDf6A041c0`](https://testnet.monadvision.com/address/0xE2cBB61a976294a31756D0483e00dDbDf6A041c0) — verified
 - **Task id:** `0` · **Reward:** 0.005 DUSD (half a cent) per answer
 
 ---
@@ -87,7 +87,7 @@ offered in the product.
 - **Gas.** Workers hold no MON, so a relayer submits their signed payloads and pays. This is safe because the *contract* verifies the worker's signature: the relayer cannot forge an answer, redirect a payout, or touch a balance. The worst it can do is refuse to deliver.
 - **Whose wallet is it.** Privy creates the embedded wallet at Google sign-in and the key is split across the device, Privy's infrastructure and a recovery share — reassembled inside a TEE only when the worker authorises something. In practice that means the wallet works in this app, on any device they sign into, without a seed phrase. It also means it is invisible to MetaMask, because MetaMask has never seen the key. `/withdraw` therefore offers **Export private key**, which hands over the raw key to import anywhere. Without that escape hatch "your wallet" would be a claim the product could not back.
 - **Payouts.** Earnings accrue to an internal ledger keyed by public key, then settle in a single `withdraw` to any address the worker names. Transferring on every answer would mean paying ERC-20 gas hundreds of times to move a couple of dollars. Cash-out has a floor of 0.05 DUSD, because sweeping a few cents costs more gas than it moves.
-- **Receipts.** Finishing a task mints a `WorkReceipt` NFT to the same address, recording the amount and the number of answers behind it. A stablecoin payout is invisible in a wallet until the token is manually imported, which makes a real payment feel like nothing happened; the NFT shows up on its own. Its artwork is generated on-chain as an SVG data URI, so nothing has to stay hosted for it to keep rendering.
+- **Receipts.** Finishing a task mints a `WorkReceipt` NFT recording what *that task* paid and what kind of work it was — not a running total, which would make every receipt look like it paid more than the job was worth. Its artwork is generated on-chain as an SVG data URI to the same address, recording the amount and the number of answers behind it. A stablecoin payout is invisible in a wallet until the token is manually imported, which makes a real payment feel like nothing happened; the NFT shows up on its own. Its artwork is generated on-chain as an SVG data URI, so nothing has to stay hosted for it to keep rendering.
 
 ## Repository layout
 
@@ -99,7 +99,7 @@ contracts/
   src/WorkReceipt.sol   cash-out receipt NFT, artwork generated on-chain
   src/EIP712.sol        typed-data signing for embedded wallets
   src/Base64.sol        encoder for the NFT's inline metadata
-  test/TaskPool.t.sol   48 tests, real P256 and secp256k1 signatures
+  test/TaskPool.t.sol   51 tests, real P256 and secp256k1 signatures
   script/webauthn.js    generates real WebAuthn assertions for those tests
   script/Deploy.s.sol   deploys and seeds a funded task
 web/
@@ -172,7 +172,7 @@ Open `http://localhost:3000` on a phone with Face ID or a fingerprint reader, an
 ### 3. Tests
 
 ```bash
-cd contracts && forge test --odyssey -vv    # 48 contract tests, local
+cd contracts && forge test --odyssey -vv    # 51 contract tests, local
 cd web && npm test                          # DER parser + challenge encoding
 cd web && npx tsx scripts/e2e-onchain.ts    # passkey flow against deployed contracts
 cd web && npx tsx scripts/e2e-modes.ts      # all three task modes, live chain

@@ -32,6 +32,52 @@ export function estimateGas(bytes: number): number {
   return words * 20_000 + bytes * 16 + 200_000;
 }
 
+/**
+ * Renders each page of a PDF to an image.
+ *
+ * A requester with a contact sheet or a scanned batch has one file, not
+ * twenty JPEGs, and asking them to export the pages by hand is asking them
+ * not to bother. Rendered at the same size limit as an upload, so a PDF page
+ * costs the same to store as a photo.
+ */
+export async function pdfToImages(file: File): Promise<PreparedImage[]> {
+  const pdfjs = await import("pdfjs-dist");
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/build/pdf.worker.mjs",
+    import.meta.url
+  ).toString();
+
+  const doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  const out: PreparedImage[] = [];
+
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const base = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({
+      scale: Math.min(1, MAX_EDGE / Math.max(base.width, base.height)),
+    });
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas unavailable");
+
+    await page.render({ canvas, canvasContext: ctx, viewport }).promise;
+
+    let quality = QUALITY;
+    let dataUri = canvas.toDataURL("image/jpeg", quality);
+    while (dataUri.length > MAX_BYTES_PER_IMAGE && quality > 0.25) {
+      quality -= 0.1;
+      dataUri = canvas.toDataURL("image/jpeg", quality);
+    }
+
+    out.push({ dataUri, bytes: dataUri.length, name: `${file.name} p${i}` });
+  }
+
+  return out;
+}
+
 export type PreparedImage = {
   dataUri: string;
   bytes: number;

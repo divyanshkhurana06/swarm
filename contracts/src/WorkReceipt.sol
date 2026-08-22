@@ -20,10 +20,13 @@ contract WorkReceipt {
     address public immutable pool;
 
     struct Receipt {
-        uint128 amount; // paid out, in the payout token's decimals
-        uint64 answers; // lifetime answers at time of cash-out
+        uint128 amount; // paid for this task, in the payout token's decimals
+        uint64 answers; // answers given on this task
         uint64 timestamp;
     }
+
+    /// @notice What kind of work earned this receipt.
+    mapping(uint256 tokenId => string) public kindOf;
 
     uint256 public totalSupply;
     mapping(uint256 tokenId => address) private _ownerOf;
@@ -45,7 +48,10 @@ contract WorkReceipt {
         pool = _pool;
     }
 
-    function mint(address to, uint256 amount, uint256 answers) external returns (uint256 tokenId) {
+    function mint(address to, uint256 amount, uint256 answers, string calldata kind)
+        external
+        returns (uint256 tokenId)
+    {
         if (msg.sender != pool) revert NotPool();
         if (to == address(0)) revert BadRecipient();
 
@@ -56,6 +62,7 @@ contract WorkReceipt {
         _ownerOf[tokenId] = to;
         receiptOf[tokenId] =
             Receipt(uint128(amount), uint64(answers), uint64(block.timestamp));
+        kindOf[tokenId] = kind;
 
         emit Transfer(address(0), to, tokenId);
     }
@@ -82,6 +89,9 @@ contract WorkReceipt {
             '<text x="32" y="248" fill="#a1a1aa" font-family="monospace" font-size="15">',
             answers,
             " answers, paid on Monad</text>",
+            '<text x="32" y="286" fill="#71717a" font-family="monospace" font-size="14">',
+            kindOf[tokenId],
+            "</text>",
             '<text x="32" y="356" fill="#52525b" font-family="monospace" font-size="12">receipt #',
             _toString(tokenId),
             "</text>",
@@ -96,7 +106,9 @@ contract WorkReceipt {
             paid,
             '"},{"trait_type":"Answers","value":',
             answers,
-            '}],"image":"data:image/svg+xml;base64,',
+            '},{"trait_type":"Task type","value":"',
+            kindOf[tokenId],
+            '"}],"image":"data:image/svg+xml;base64,',
             Base64.encode(bytes(svg)),
             '"}'
         );

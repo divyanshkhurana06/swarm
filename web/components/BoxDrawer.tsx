@@ -4,25 +4,26 @@ import { useRef, useState } from "react";
 import { boxFromDrag, type Box } from "@/lib/images";
 
 /**
- * Draw a box around the thing.
+ * Draw boxes around the things.
  *
- * Coordinates are kept in basis points of the image rather than pixels, so a
- * box drawn with a thumb on a phone lands in the same place when the requester
- * opens it on a monitor.
+ * Several boxes per image, because a street scene holds more than one car and
+ * one box would force the worker to pick a favourite while the requester pays
+ * for a complete answer.
  *
- * Pointer events rather than mouse or touch events: the same handler then
- * covers finger, stylus and mouse, which is the difference between this
- * working on the phones in the room and only on a laptop.
+ * Coordinates are basis points of the image rather than pixels, so a box drawn
+ * with a thumb lands in the same place on the requester's monitor. Pointer
+ * events cover finger, stylus and mouse with one handler -- the difference
+ * between working on the phones in the room and only on a laptop.
  */
 export function BoxDrawer({
   src,
-  box,
+  boxes,
   onChange,
   disabled,
 }: {
   src: string;
-  box: Box | null;
-  onChange: (box: Box | null) => void;
+  boxes: Box[];
+  onChange: (boxes: Box[]) => void;
   disabled?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -39,15 +40,12 @@ export function BoxDrawer({
     };
   };
 
-  const shown = live ?? box;
-
   return (
     <div className="space-y-2">
       <div
         ref={ref}
         onPointerDown={(e) => {
           if (disabled || failed) return;
-          // Capture so a drag that leaves the image still finishes cleanly.
           (e.target as Element).setPointerCapture?.(e.pointerId);
           const p = toBp(e);
           setDrag(p);
@@ -62,10 +60,10 @@ export function BoxDrawer({
           const final = boxFromDrag(drag, toBp(e));
           setDrag(null);
           setLive(null);
-          // A tap is not a box; treat anything tiny as a miss.
-          onChange(final.w > 200 && final.h > 200 ? final : null);
+          // A tap is not a box; anything tiny is a stray touch, not an answer.
+          if (final.w > 200 && final.h > 200) onChange([...boxes, final]);
         }}
-        className={`relative touch-none overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 select-none ${
+        className={`relative touch-none select-none overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 ${
           disabled ? "" : "cursor-crosshair"
         }`}
       >
@@ -88,7 +86,7 @@ export function BoxDrawer({
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={src}
-          alt="Draw a box around the target"
+          alt="Draw a box around each target"
           draggable={false}
           onLoad={() => setLoaded(true)}
           onError={() => setFailed(true)}
@@ -97,14 +95,38 @@ export function BoxDrawer({
           }`}
         />
 
-        {shown && shown.w > 0 && (
+        {boxes.map((b, i) => (
           <div
-            className="pointer-events-none absolute border-2 border-emerald-400 bg-emerald-400/15"
+            key={i}
+            className="absolute border-2 border-emerald-400 bg-emerald-400/15"
             style={{
-              left: `${shown.x / 100}%`,
-              top: `${shown.y / 100}%`,
-              width: `${shown.w / 100}%`,
-              height: `${shown.h / 100}%`,
+              left: `${b.x / 100}%`,
+              top: `${b.y / 100}%`,
+              width: `${b.w / 100}%`,
+              height: `${b.h / 100}%`,
+            }}
+          >
+            <button
+              onPointerDown={(e) => {
+                // Don't let removing a box start a new one underneath.
+                e.stopPropagation();
+                onChange(boxes.filter((_, j) => j !== i));
+              }}
+              className="absolute -right-2 -top-2 grid h-5 w-5 place-items-center rounded-full bg-zinc-900 text-xs text-zinc-300 ring-1 ring-emerald-400/60"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+
+        {live && live.w > 0 && (
+          <div
+            className="pointer-events-none absolute border-2 border-dashed border-emerald-300 bg-emerald-300/10"
+            style={{
+              left: `${live.x / 100}%`,
+              top: `${live.y / 100}%`,
+              width: `${live.w / 100}%`,
+              height: `${live.h / 100}%`,
             }}
           />
         )}
@@ -112,14 +134,16 @@ export function BoxDrawer({
 
       <div className="flex items-center justify-between text-xs">
         <span className="text-zinc-600">
-          {shown ? "Drag again to redraw" : "Drag a box around it"}
+          {boxes.length === 0
+            ? "Drag a box around each one you find"
+            : `${boxes.length} box${boxes.length > 1 ? "es" : ""} · drag to add another`}
         </span>
-        {box && (
+        {boxes.length > 0 && (
           <button
-            onClick={() => onChange(null)}
+            onClick={() => onChange([])}
             className="text-zinc-500 underline underline-offset-4"
           >
-            Clear
+            Clear all
           </button>
         )}
       </div>

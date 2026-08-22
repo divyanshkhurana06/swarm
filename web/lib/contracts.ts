@@ -56,10 +56,11 @@ export const taskPoolAbi = parseAbi([
 
   // Embedded-wallet (Google sign-in) path. Same ledger, secp256k1 instead of P256.
   "function submitLabelFor(uint256 taskId, uint256 itemId, uint8 answer, address worker, bytes signature)",
-  "function submitBoxFor(uint256 taskId, uint256 itemId, uint64 box, address worker, bytes signature)",
-  "function boxDigest(uint256 taskId, uint256 itemId, uint64 box) view returns (bytes32)",
-  "function boxOf(uint256, uint256, bytes32) view returns (uint64)",
-  "function boxes(uint256 taskId, bytes32[] workerIds) view returns (uint64[])",
+  "function submitBoxesFor(uint256 taskId, uint256 itemId, uint64[] boxes, address worker, bytes signature)",
+  "function boxDigest(uint256 taskId, uint256 itemId, uint64[] boxes) view returns (bytes32)",
+  "function boxesOf(uint256 taskId, uint256 itemId, bytes32 workerId) view returns (uint64[])",
+  "function boxCounts(uint256 taskId, bytes32[] workerIds) view returns (uint32[])",
+  "function earnedIn(uint256, bytes32) view returns (uint256)",
   "function withdrawFor(address worker, address to, bytes signature) returns (uint256)",
   "function idOfAddress(address worker) pure returns (bytes32)",
 
