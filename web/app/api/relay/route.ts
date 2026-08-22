@@ -105,12 +105,14 @@ export async function POST(req: Request) {
       }
 
       case "postTask": {
-        const { spec, rewardPerLabel, amount, items, requester, signature } =
+        const { spec, rewardPerLabel, amount, items, mode, quorum, requester, signature } =
           body as unknown as {
             spec: string;
             rewardPerLabel: string;
             amount: string;
             items: number;
+            mode: number;
+            quorum: number;
             requester: Hex;
             signature: Hex;
           };
@@ -123,9 +125,28 @@ export async function POST(req: Request) {
             BigInt(rewardPerLabel),
             BigInt(amount),
             Number(items),
+            Number(mode),
+            Number(quorum),
             requester,
             signature,
           ],
+        });
+        break;
+      }
+
+      case "surveyFor": {
+        const { taskId, itemId, answer, worker, signature } = body as unknown as {
+          taskId: string;
+          itemId: string;
+          answer: string;
+          worker: Hex;
+          signature: Hex;
+        };
+        hash = await wallet.writeContract({
+          address: TASK_POOL,
+          abi: taskPoolAbi,
+          functionName: "submitSurveyFor",
+          args: [BigInt(taskId), BigInt(itemId), answer, worker, signature],
         });
         break;
       }

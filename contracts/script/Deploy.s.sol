@@ -49,10 +49,7 @@ contract Deploy is Script {
         // Post the seed task the same way a requester would: sign it, let the
         // pool mint the reward pool. Exercising the real path at deploy time
         // means the demo cannot diverge from what a requester actually does.
-        bytes32 digest = pool.postDigest(SPEC, REWARD_PER_LABEL, POOL, ITEMS);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
-        uint256 taskId =
-            pool.postTaskSponsored(SPEC, REWARD_PER_LABEL, POOL, ITEMS, deployer, abi.encodePacked(r, s, v));
+        uint256 taskId = _seed(pool, pk, deployer);
 
         vm.stopBroadcast();
 
@@ -61,5 +58,20 @@ contract Deploy is Script {
         console.log("TaskPool        ", address(pool));
         console.log("WorkReceipt     ", address(pool.receipts()));
         console.log("seeded task id  ", taskId);
+    }
+
+    /// @dev Split out so the locals do not overflow the stack.
+    ///      Text labelling is majority-scored: three people answer each item
+    ///      and only those who agreed with the crowd are paid.
+    function _seed(TaskPool pool, uint256 pk, address deployer) private returns (uint256) {
+        uint8 mode = uint8(TaskPool.Mode.Majority);
+        uint8 quorum = 3;
+
+        (uint8 v, bytes32 r, bytes32 s) =
+            vm.sign(pk, pool.postDigest(SPEC, REWARD_PER_LABEL, POOL, ITEMS, mode, quorum));
+
+        return pool.postTaskSponsored(
+            SPEC, REWARD_PER_LABEL, POOL, ITEMS, mode, quorum, deployer, abi.encodePacked(r, s, v)
+        );
     }
 }

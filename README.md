@@ -8,9 +8,9 @@ Built at [Monad Blitz Hyderabad V3](https://blitz.devnads.com/events/monad-blitz
 
 - **Live demo:** _TODO — add the deployed URL_
 - **Projector dashboard:** _TODO — `<url>/dashboard`_
-- **TaskPool (Monad Testnet):** [`0x73c6024536889545115325872AeAeC4fCf03c78E`](https://testnet.monadvision.com/address/0x73c6024536889545115325872AeAeC4fCf03c78E) — verified
-- **DemoUSD (Monad Testnet):** [`0x0B9773Ca827eb1E8D8d7AC07adDcdC090EC4b3B0`](https://testnet.monadvision.com/address/0x0B9773Ca827eb1E8D8d7AC07adDcdC090EC4b3B0) — verified
-- **WorkReceipt NFT (Monad Testnet):** [`0x5E36430535702e75795a105576B058265e131af0`](https://testnet.monadvision.com/address/0x5E36430535702e75795a105576B058265e131af0) — verified
+- **TaskPool (Monad Testnet):** [`0xE25edE1AFEDd4DD0Cac76dEFE62aD466242F9B98`](https://testnet.monadvision.com/address/0xE25edE1AFEDd4DD0Cac76dEFE62aD466242F9B98) — verified
+- **DemoUSD (Monad Testnet):** [`0x5448F5815AAc45f8Cb195B562A51E2Ad253906c8`](https://testnet.monadvision.com/address/0x5448F5815AAc45f8Cb195B562A51E2Ad253906c8) — verified
+- **WorkReceipt NFT (Monad Testnet):** [`0xEf48d88af6e71CD494b66681Cd4E807739918759`](https://testnet.monadvision.com/address/0xEf48d88af6e71CD494b66681Cd4E807739918759) — verified
 - **Task id:** `0` · **Reward:** 0.005 DUSD (half a cent) per answer
 
 ---
@@ -27,13 +27,34 @@ That primitive did not exist before cheap on-chain P256 verification, for two re
 
 A full passkey-authorised, paid-out answer costs **205,659 gas** on Monad testnet — measured end to end by `scripts/e2e-onchain.ts` against the deployed contracts, not estimated. (The local Foundry measurement is 156k; the real chain is higher because storage slots start cold.) At 102 gwei that is about 0.021 MON per answer.
 
+## Three kinds of work, three ways of paying
+
+The three tasks here have genuinely different economics, and pretending
+otherwise is how a labelling market ends up paying for garbage.
+
+| Task | Scoring | Why |
+|---|---|---|
+| **Image labelling** | First come, first served — paid on submit | "Is there a car in this photo" has a right answer. Waiting for a vote would only slow it down. |
+| **Text labelling** | Majority — paid only if you agreed with the crowd | "Is this ticket urgent" is a judgement call. A worker who clicks at random loses money instead of earning it, so guessing has negative expected value. |
+| **Surveys** | Paid on completion of every question | A half-finished form is worth nothing to the requester, so it earns nothing. Paying per question would reward abandoning the form after the easy ones. |
+
+Majority answers are held in escrow until `quorum` workers have answered the
+item; the contract then settles it, pays everyone who agreed, and pays the
+dissenters nothing. Whatever the crowd doesn't earn goes back to the requester
+on `closeTask`.
+
+For surveys, the requester uploads a PDF (parsed in the browser) or pastes
+text, and it is split into questions they can edit before posting — a
+heuristic will sometimes be wrong, and silently posting a mangled survey
+wastes both the requester's money and the workers' time.
+
 ## The two sides
 
 | | |
 |---|---|
-| `/post` | A requester writes a question, pastes items one per line, sets what an answer is worth, and signs. No gas, no tokens. |
+| `/post` | Pick a task type, add items (or upload a survey PDF), set the price, sign once. No gas, no tokens. |
 | `/` | A worker signs in with Google, picks a task, and answers. Paid per answer, immediately. |
-| `/results/[id]` | The dataset: every item, the crowd's answer, and how much of the crowd agreed. Downloadable as JSON or CSV. |
+| `/results/[id]` | The dataset: per-item answers and agreement for labelling, full responses for surveys. JSON or CSV. |
 | `/withdraw` | Cash out to any address. Mints a receipt NFT. |
 | `/dashboard` | The projector wall — live payouts as they are mined. |
 
@@ -70,14 +91,16 @@ contracts/
   src/WorkReceipt.sol   cash-out receipt NFT, artwork generated on-chain
   src/EIP712.sol        typed-data signing for embedded wallets
   src/Base64.sol        encoder for the NFT's inline metadata
-  test/TaskPool.t.sol   24 tests, real P256 and secp256k1 signatures
+  test/TaskPool.t.sol   38 tests, real P256 and secp256k1 signatures
   script/webauthn.js    generates real WebAuthn assertions for those tests
   script/Deploy.s.sol   deploys and seeds a funded task
 web/
   lib/passkey.ts        WebAuthn client: DER parsing, low-s, challenge encoding
   lib/contracts.ts      chain config and ABI
   app/page.tsx          the worker app
-  app/post/page.tsx      requester: post a task
+  lib/survey.ts          PDF text extraction and question splitting
+  components/ui.tsx      shared shell, wallet bar, inputs
+  app/post/page.tsx      requester: post any of the three task types
   app/results/[id]       the labelled dataset, JSON/CSV export
   app/withdraw/page.tsx  cash out to any address
   app/dashboard/page.tsx the projector wall
@@ -141,9 +164,10 @@ Open `http://localhost:3000` on a phone with Face ID or a fingerprint reader, an
 ### 3. Tests
 
 ```bash
-cd contracts && forge test --odyssey -vv    # 24 contract tests, local
+cd contracts && forge test --odyssey -vv    # 38 contract tests, local
 cd web && npm test                          # DER parser + challenge encoding
-cd web && npx tsx scripts/e2e-onchain.ts    # full flow against deployed contracts
+cd web && npx tsx scripts/e2e-onchain.ts    # passkey flow against deployed contracts
+cd web && npx tsx scripts/e2e-modes.ts      # all three task modes, live chain
 ```
 
 `scripts/e2e-onchain.ts` is the one that matters most. The Foundry suite runs

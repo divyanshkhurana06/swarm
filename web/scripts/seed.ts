@@ -1,0 +1,63 @@
+/** Posts one task of each kind so the marketplace isn't empty at demo time. */
+import { createPublicClient, createWalletClient, http, type Hex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { chain, TASK_POOL, taskPoolAbi } from "../lib/contracts";
+
+const publicClient = createPublicClient({ chain, transport: http() });
+const account = privateKeyToAccount(process.env.RELAYER_PRIVATE_KEY as Hex);
+const relay = createWalletClient({ account, chain, transport: http() });
+
+const domain = { name: "Swarm", version: "1", chainId: chain.id, verifyingContract: TASK_POOL } as const;
+const PostTask = [
+  { name: "spec", type: "string" }, { name: "rewardPerLabel", type: "uint96" },
+  { name: "amount", type: "uint128" }, { name: "items", type: "uint32" },
+  { name: "mode", type: "uint8" }, { name: "quorum", type: "uint8" },
+] as const;
+
+async function post(spec: object, reward: bigint, items: number, mode: number, quorum: number) {
+  const specJson = JSON.stringify(spec);
+  const amount = reward * BigInt(items * quorum);
+  const signature = await account.signTypedData({
+    domain, types: { PostTask }, primaryType: "PostTask",
+    message: { spec: specJson, rewardPerLabel: reward, amount, items, mode, quorum },
+  });
+  const hash = await relay.writeContract({
+    address: TASK_POOL, abi: taskPoolAbi, functionName: "postTaskSponsored",
+    args: [specJson, reward, amount, items, mode, quorum, account.address, signature],
+  });
+  await publicClient.waitForTransactionReceipt({ hash });
+  console.log(`  posted "${(spec as {title:string}).title}" (${items} items, mode ${mode}, quorum ${quorum})`);
+}
+
+const R = 5_000n;
+const img = (id: number, text: string) => ({ id, text });
+
+async function main() {
+  await post({
+    title: "Street scenes — is there a car?",
+    question: "Is there a car in this image?",
+    kind: "image",
+    answers: { "0": "No car", "1": "Car" },
+    items: [
+      img(0, "https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=800"),
+      img(1, "https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=800"),
+      img(2, "https://images.unsplash.com/photo-1502877338535-766e1452684a?w=800"),
+      img(3, "https://images.unsplash.com/photo-1493246507139-91e8fad9978e?w=800"),
+      img(4, "https://images.unsplash.com/photo-1449824913935-59a10b8d2000?w=800"),
+      img(5, "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=800"),
+    ],
+  }, R, 6, 0, 2);
+
+  await post({
+    title: "Customer research",
+    question: "Answer in your own words — a sentence is fine",
+    kind: "survey",
+    answers: { "0": "", "1": "" },
+    items: [
+      { id: 0, text: "What made you choose this product over the alternatives?" },
+      { id: 1, text: "How often do you use it in a typical week?" },
+      { id: 2, text: "What would make you recommend it to a colleague?" },
+    ],
+  }, R, 3, 2, 1);
+}
+main().catch((e) => { console.error(e); process.exit(1); });

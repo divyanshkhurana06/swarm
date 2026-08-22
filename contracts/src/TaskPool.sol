@@ -35,6 +35,23 @@ contract TaskPool {
     ///         between earning and cashing out.
     IERC20 public immutable token;
 
+    /// @notice How a task decides who gets paid.
+    /// @dev The three kinds of work here have genuinely different economics,
+    ///      and pretending otherwise is how you end up paying for garbage.
+    enum Mode {
+        /// Objective and fast (is this a car?). First to answer is paid, up to
+        /// `quorum` answers per item. Quality comes from the task being easy.
+        FirstCome,
+        /// Judgement calls (is this comment abusive?). Answers are held until
+        /// `quorum` workers have answered, then only those who agreed with the
+        /// majority are paid. Guessing has negative expected value.
+        Majority,
+        /// Long-form questions. Nothing is paid until the worker has answered
+        /// every question, because a half-finished survey is worth nothing to
+        /// the requester.
+        Survey
+    }
+
     struct Task {
         address requester;
         uint96 rewardPerLabel;
@@ -42,6 +59,8 @@ contract TaskPool {
         uint128 paidOut;
         uint64 labelCount;
         bool open;
+        Mode mode;
+        uint8 quorum;
     }
 
     Task[] private _tasks;
@@ -94,6 +113,38 @@ contract TaskPool {
     mapping(uint256 taskId => mapping(bytes32 workerId => mapping(uint256 itemId => bool)))
         public hasLabeled;
 
+    // --- majority mode ---------------------------------------------------
+
+    /// @notice Everyone who has answered an item, so the winners can be paid
+    ///         once the item resolves.
+    mapping(uint256 taskId => mapping(uint256 itemId => bytes32[])) private _voters;
+
+    /// @notice The answer a worker gave, offset by one so 0 means "no answer".
+    mapping(uint256 taskId => mapping(uint256 itemId => mapping(bytes32 workerId => uint8)))
+        public voteOf;
+
+    /// @notice Items whose majority has been settled and paid.
+    mapping(uint256 taskId => mapping(uint256 itemId => bool)) public resolved;
+
+    // --- survey mode -----------------------------------------------------
+
+    /// @notice Free-text answers. On-chain because there is no backend, and a
+    ///         survey response nobody can read is not a survey response.
+    mapping(uint256 taskId => mapping(uint256 itemId => mapping(bytes32 workerId => string)))
+        public surveyAnswer;
+
+    /// @notice How many questions a worker has answered on a survey.
+    mapping(uint256 taskId => mapping(bytes32 workerId => uint32)) public answeredCount;
+
+    /// @notice Surveys already paid out, so completion pays exactly once.
+    mapping(uint256 taskId => mapping(bytes32 workerId => bool)) public surveyPaid;
+
+    /// @notice Everyone who completed a survey.
+    /// @dev Without this a requester cannot enumerate the responses they paid
+    ///      for -- and unreadable answers are not answers. Events are not an
+    ///      option: the public RPC caps eth_getLogs at a 100-block range.
+    mapping(uint256 taskId => bytes32[]) private _respondents;
+
     uint256 public totalLabels;
     uint256 public totalPaid;
     uint256 public workerCount;
@@ -115,6 +166,13 @@ contract TaskPool {
     event Withdrawn(
         bytes32 indexed workerId, address indexed to, uint256 amount, uint256 receiptId
     );
+    /// @notice A majority item settled: who agreed got paid, who didn't did not.
+    event ItemResolved(
+        uint256 indexed taskId, uint256 indexed itemId, uint8 majority, uint256 paidWorkers
+    );
+    event SurveyAnswered(uint256 indexed taskId, bytes32 indexed workerId, uint256 itemId);
+    event SurveyCompleted(uint256 indexed taskId, bytes32 indexed workerId, uint256 amount);
+    event Paid(uint256 indexed taskId, bytes32 indexed workerId, uint256 amount);
 
     error BadSignature();
     error TaskNotOpen();
@@ -126,6 +184,9 @@ contract TaskPool {
     error ZeroReward();
     error TransferFailed();
     error BelowMinimum();
+    error WrongMode();
+    error ItemFull();
+    error EmptyAnswer();
 
     /// @notice Smallest cash-out, in the payout token's decimals (0.05 DUSD).
     /// @dev Sweeping a few cents costs more in gas than it moves, and a
@@ -165,7 +226,9 @@ contract TaskPool {
                 funded: amount,
                 paidOut: 0,
                 labelCount: 0,
-                open: true
+                open: true,
+                mode: Mode.FirstCome,
+                quorum: 1
             })
         );
         taskURI[taskId] = uri;
@@ -174,19 +237,30 @@ contract TaskPool {
         emit TaskCreated(taskId, msg.sender, uri, rewardPerLabel, amount);
     }
 
-    bytes32 private constant POST_TYPEHASH =
-        keccak256("PostTask(string spec,uint96 rewardPerLabel,uint128 amount,uint32 items)");
+    bytes32 private constant POST_TYPEHASH = keccak256(
+        "PostTask(string spec,uint96 rewardPerLabel,uint128 amount,uint32 items,uint8 mode,uint8 quorum)"
+    );
 
     function postDigest(
         string calldata spec,
         uint96 rewardPerLabel,
         uint128 amount,
-        uint32 items
+        uint32 items,
+        uint8 mode,
+        uint8 quorum
     ) public view returns (bytes32) {
         return EIP712.digest(
             domainSeparator(),
             keccak256(
-                abi.encode(POST_TYPEHASH, keccak256(bytes(spec)), rewardPerLabel, amount, items)
+                abi.encode(
+                    POST_TYPEHASH,
+                    keccak256(bytes(spec)),
+                    rewardPerLabel,
+                    amount,
+                    items,
+                    mode,
+                    quorum
+                )
             )
         );
     }
@@ -206,12 +280,18 @@ contract TaskPool {
         uint96 rewardPerLabel,
         uint128 amount,
         uint32 items,
+        uint8 mode,
+        uint8 quorum,
         address requester,
         bytes calldata signature
     ) external returns (uint256 taskId) {
         if (rewardPerLabel == 0) revert ZeroReward();
-        if (EIP712.recover(postDigest(spec, rewardPerLabel, amount, items), signature) != requester)
-        {
+        if (quorum == 0) revert ZeroReward();
+        if (
+            EIP712.recover(
+                postDigest(spec, rewardPerLabel, amount, items, mode, quorum), signature
+            ) != requester
+        ) {
             revert BadSignature();
         }
 
@@ -223,7 +303,9 @@ contract TaskPool {
                 funded: amount,
                 paidOut: 0,
                 labelCount: 0,
-                open: true
+                open: true,
+                mode: Mode(mode),
+                quorum: quorum
             })
         );
         taskSpec[taskId] = spec;
@@ -338,24 +420,75 @@ contract TaskPool {
     function _credit(uint256 taskId, uint256 itemId, uint8 answer, bytes32 workerId) private {
         Task storage t = _tasks[taskId];
         if (!t.open) revert TaskNotOpen();
+        if (t.mode == Mode.Survey) revert WrongMode();
         if (hasLabeled[taskId][workerId][itemId]) revert AlreadyLabeled();
+        if (answer > 1) revert WrongMode();
 
-        uint256 reward = t.rewardPerLabel;
-        if (t.funded - t.paidOut < reward) revert PoolExhausted();
+        // An item only needs so many opinions. Past that the requester is
+        // paying for data they already have.
+        uint32 given = tally[taskId][itemId][0] + tally[taskId][itemId][1];
+        if (given >= t.quorum) revert ItemFull();
 
         hasLabeled[taskId][workerId][itemId] = true;
         tally[taskId][itemId][answer]++;
-        t.paidOut += uint128(reward);
         t.labelCount++;
-        earned[workerId] += reward;
         answersBy[workerId]++;
-
         unchecked {
             totalLabels++;
-            totalPaid += reward;
         }
 
-        emit LabelSubmitted(taskId, workerId, itemId, answer, reward, totalLabels);
+        emit LabelSubmitted(taskId, workerId, itemId, answer, t.rewardPerLabel, totalLabels);
+
+        if (t.mode == Mode.FirstCome) {
+            // Objective work: the answer is either right or obvious, so pay now.
+            _pay(taskId, workerId, t.rewardPerLabel);
+            return;
+        }
+
+        // Majority: hold the money until enough people have weighed in. A
+        // worker who guesses is paid nothing, so guessing is a losing strategy
+        // rather than free money.
+        _voters[taskId][itemId].push(workerId);
+        voteOf[taskId][itemId][workerId] = answer + 1;
+
+        if (given + 1 >= t.quorum && !resolved[taskId][itemId]) {
+            _resolve(taskId, itemId);
+        }
+    }
+
+    /// @dev Settle a majority item: pay everyone who agreed with the crowd.
+    ///      Ties go to answer 0, which matters only when the quorum is even --
+    ///      an odd quorum avoids the question entirely.
+    function _resolve(uint256 taskId, uint256 itemId) private {
+        Task storage t = _tasks[taskId];
+        resolved[taskId][itemId] = true;
+
+        uint8 majority = tally[taskId][itemId][1] > tally[taskId][itemId][0] ? 1 : 0;
+        bytes32[] storage vs = _voters[taskId][itemId];
+
+        uint256 paidWorkers;
+        for (uint256 i = 0; i < vs.length; i++) {
+            if (voteOf[taskId][itemId][vs[i]] == majority + 1) {
+                _pay(taskId, vs[i], t.rewardPerLabel);
+                paidWorkers++;
+            }
+        }
+
+        emit ItemResolved(taskId, itemId, majority, paidWorkers);
+    }
+
+    /// @dev Credits a worker and draws down the task's escrow.
+    function _pay(uint256 taskId, bytes32 workerId, uint256 amount) private {
+        Task storage t = _tasks[taskId];
+        if (t.funded - t.paidOut < amount) revert PoolExhausted();
+
+        t.paidOut += uint128(amount);
+        earned[workerId] += amount;
+        unchecked {
+            totalPaid += amount;
+        }
+
+        emit Paid(taskId, workerId, amount);
     }
 
     /// @notice Sweep everything earned to any address the worker names.
@@ -465,6 +598,98 @@ contract TaskPool {
         }
 
         _credit(taskId, itemId, answer, workerId);
+    }
+
+    bytes32 private constant SURVEY_TYPEHASH =
+        keccak256("SurveyAnswer(uint256 taskId,uint256 itemId,bytes32 answerHash)");
+
+    function surveyDigest(uint256 taskId, uint256 itemId, string calldata answer)
+        public
+        view
+        returns (bytes32)
+    {
+        return EIP712.digest(
+            domainSeparator(),
+            keccak256(abi.encode(SURVEY_TYPEHASH, taskId, itemId, keccak256(bytes(answer))))
+        );
+    }
+
+    /// @notice Answer one survey question.
+    ///
+    /// @dev Nothing is paid until every question is answered. A survey filled
+    ///      in halfway is worth nothing to the requester, so paying per
+    ///      question would be paying for something nobody can use -- and would
+    ///      reward abandoning the form after the easy questions.
+    function submitSurveyFor(
+        uint256 taskId,
+        uint256 itemId,
+        string calldata answer,
+        address worker,
+        bytes calldata signature
+    ) external {
+        Task storage t = _tasks[taskId];
+        if (!t.open) revert TaskNotOpen();
+        if (t.mode != Mode.Survey) revert WrongMode();
+        if (bytes(answer).length == 0) revert EmptyAnswer();
+        if (EIP712.recover(surveyDigest(taskId, itemId, answer), signature) != worker) {
+            revert BadSignature();
+        }
+
+        bytes32 workerId = idOfAddress(worker);
+        if (hasLabeled[taskId][workerId][itemId]) revert AlreadyLabeled();
+
+        if (!isRegistered[workerId]) {
+            isRegistered[workerId] = true;
+            unchecked {
+                workerCount++;
+            }
+            emit WorkerRegistered(workerId, uint256(uint160(worker)), 0);
+        }
+
+        hasLabeled[taskId][workerId][itemId] = true;
+        surveyAnswer[taskId][itemId][workerId] = answer;
+        answeredCount[taskId][workerId]++;
+        t.labelCount++;
+        answersBy[workerId]++;
+        unchecked {
+            totalLabels++;
+        }
+
+        emit SurveyAnswered(taskId, workerId, itemId);
+
+        // Finished the whole thing -- pay for the completed response.
+        if (
+            answeredCount[taskId][workerId] >= itemCount[taskId]
+                && !surveyPaid[taskId][workerId]
+        ) {
+            surveyPaid[taskId][workerId] = true;
+            _respondents[taskId].push(workerId);
+            uint256 amount = uint256(t.rewardPerLabel) * itemCount[taskId];
+            _pay(taskId, workerId, amount);
+            emit SurveyCompleted(taskId, workerId, amount);
+        }
+    }
+
+    /// @notice Everyone who completed this survey.
+    function respondents(uint256 taskId) external view returns (bytes32[] memory) {
+        return _respondents[taskId];
+    }
+
+    function respondentCount(uint256 taskId) external view returns (uint256) {
+        return _respondents[taskId].length;
+    }
+
+    /// @notice Read a worker's survey response back, question by question.
+    function surveyResponse(uint256 taskId, bytes32 workerId)
+        external
+        view
+        returns (string[] memory answers)
+    {
+        uint256 n = itemCount[taskId];
+        answers = new string[](n);
+        for (uint256 i = 0; i < n; i++) {
+            answers[i] = surveyAnswer[taskId][i][workerId];
+        }
     }
 
     /// @notice Cash out to any address, authorised by the embedded wallet.

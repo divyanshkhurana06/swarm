@@ -36,7 +36,7 @@ export const DUSD_DECIMALS = 6;
 export const taskPoolAbi = parseAbi([
   "struct WebAuthnSignature { bytes authenticatorData; bytes clientDataJSON; uint256 challengeIndex; uint256 r; uint256 s; }",
   "struct PubKey { uint256 x; uint256 y; }",
-  "struct Task { address requester; uint96 rewardPerLabel; uint128 funded; uint128 paidOut; uint64 labelCount; bool open; }",
+  "struct Task { address requester; uint96 rewardPerLabel; uint128 funded; uint128 paidOut; uint64 labelCount; bool open; uint8 mode; uint8 quorum; }",
 
   "function registerWorker(PubKey pk, bytes32 credentialHash) returns (bytes32)",
   "function submitLabel(uint256 taskId, uint256 itemId, uint8 answer, bytes32 workerId, WebAuthnSignature sig)",
@@ -48,8 +48,17 @@ export const taskPoolAbi = parseAbi([
   "function idOfAddress(address worker) pure returns (bytes32)",
 
   // Requester side. Task specs live on-chain, so a worker needs no backend.
-  "function postTaskSponsored(string spec, uint96 rewardPerLabel, uint128 amount, uint32 items, address requester, bytes signature) returns (uint256)",
-  "function postDigest(string spec, uint96 rewardPerLabel, uint128 amount, uint32 items) view returns (bytes32)",
+  "function postTaskSponsored(string spec, uint96 rewardPerLabel, uint128 amount, uint32 items, uint8 mode, uint8 quorum, address requester, bytes signature) returns (uint256)",
+  "function postDigest(string spec, uint96 rewardPerLabel, uint128 amount, uint32 items, uint8 mode, uint8 quorum) view returns (bytes32)",
+  "function submitSurveyFor(uint256 taskId, uint256 itemId, string answer, address worker, bytes signature)",
+  "function surveyDigest(uint256 taskId, uint256 itemId, string answer) view returns (bytes32)",
+  "function surveyResponse(uint256 taskId, bytes32 workerId) view returns (string[])",
+  "function respondents(uint256 taskId) view returns (bytes32[])",
+  "function respondentCount(uint256 taskId) view returns (uint256)",
+  "function answeredCount(uint256, bytes32) view returns (uint32)",
+  "function surveyPaid(uint256, bytes32) view returns (bool)",
+  "function resolved(uint256, uint256) view returns (bool)",
+  "function voteOf(uint256, uint256, bytes32) view returns (uint8)",
   "function taskSpec(uint256) view returns (string)",
   "function itemCount(uint256) view returns (uint32)",
   "function tally(uint256, uint256, uint8) view returns (uint32)",
@@ -83,6 +92,9 @@ export const taskPoolAbi = parseAbi([
   "event LabelSubmitted(uint256 indexed taskId, bytes32 indexed workerId, uint256 itemId, uint8 answer, uint256 reward, uint256 totalLabels)",
   "event WorkerRegistered(bytes32 indexed workerId, uint256 x, uint256 y)",
   "event Withdrawn(bytes32 indexed workerId, address indexed to, uint256 amount, uint256 receiptId)",
+  "event ItemResolved(uint256 indexed taskId, uint256 indexed itemId, uint8 majority, uint256 paidWorkers)",
+  "event Paid(uint256 indexed taskId, bytes32 indexed workerId, uint256 amount)",
+  "event SurveyCompleted(uint256 indexed taskId, bytes32 indexed workerId, uint256 amount)",
 ]);
 
 export const explorerTx = (hash: string) =>

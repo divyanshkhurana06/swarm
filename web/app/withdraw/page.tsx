@@ -12,6 +12,7 @@ import {
 } from "@/lib/contracts";
 import { signWithdraw, type SigningWallet } from "@/lib/wallet";
 import { publicClient, workerIdOfAddress } from "@/lib/tasks";
+import { Shell, WalletBar } from "@/components/ui";
 
 /**
  * Cash out.
@@ -221,6 +222,7 @@ function Withdraw() {
 
   return (
     <Shell>
+      <WalletBar address={address} />
       <Link href="/" className="text-sm text-zinc-500">
         ← Back to earning
       </Link>
@@ -300,10 +302,3 @@ function Withdraw() {
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col gap-6 p-6">
-      {children}
-    </main>
-  );
-}

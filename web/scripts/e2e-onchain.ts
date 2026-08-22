@@ -91,10 +91,65 @@ const read = (functionName: string, args: readonly unknown[] = []) =>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   }) as Promise<any>;
 
+/**
+ * Posts a dedicated FirstCome task for this run.
+ *
+ * Reusing the seeded task is fragile: it is majority-scored, so a lone worker
+ * is never paid and any "answer until the balance clears" loop runs forever.
+ */
+async function postOwnTask(): Promise<bigint> {
+  const spec = JSON.stringify({
+    title: "e2e passkey run",
+    question: "Flag it?",
+    kind: "text",
+    answers: { "0": "Fine", "1": "Flag" },
+    items: Array.from({ length: 20 }, (_, id) => ({ id, text: `item ${id}` })),
+  });
+  const reward = 5_000n;
+  const amount = reward * 20n;
+
+  const signature = await account.signTypedData({
+    domain: {
+      name: "Swarm",
+      version: "1",
+      chainId: chain.id,
+      verifyingContract: TASK_POOL,
+    },
+    types: {
+      PostTask: [
+        { name: "spec", type: "string" },
+        { name: "rewardPerLabel", type: "uint96" },
+        { name: "amount", type: "uint128" },
+        { name: "items", type: "uint32" },
+        { name: "mode", type: "uint8" },
+        { name: "quorum", type: "uint8" },
+      ],
+    },
+    primaryType: "PostTask",
+    message: { spec, rewardPerLabel: reward, amount, items: 20, mode: 0, quorum: 1 },
+  });
+
+  const id = (await read("taskCount")) as bigint;
+  await send("postTaskSponsored", [
+    spec,
+    reward,
+    amount,
+    20,
+    0,
+    1,
+    account.address,
+    signature,
+  ]);
+  return id;
+}
+
 async function main() {
   console.log(`chain    ${chain.name} (${chain.id})`);
   console.log(`TaskPool ${TASK_POOL}`);
   console.log(`relayer  ${account.address}\n`);
+
+  const TASK = await postOwnTask();
+  console.log(`task     #${TASK} (FirstCome, so answers pay immediately)`);
 
   const pk = pubkey();
   const workerId = (await read("idOf", [pk])) as Hex;
@@ -109,10 +164,10 @@ async function main() {
       throw new Error(`workerId mismatch: ${localWorkerId(pk)} vs ${onChainId}`);
     }
 
-    const onChainLabel = (await read("labelChallenge", [TASK_ID, 7n, 1])) as Hex;
-    if (localLabelChallenge(TASK_ID, 7n, 1) !== onChainLabel) {
+    const onChainLabel = (await read("labelChallenge", [TASK, 7n, 1])) as Hex;
+    if (localLabelChallenge(TASK, 7n, 1) !== onChainLabel) {
       throw new Error(
-        `labelChallenge mismatch: ${localLabelChallenge(TASK_ID, 7n, 1)} vs ${onChainLabel}`
+        `labelChallenge mismatch: ${localLabelChallenge(TASK, 7n, 1)} vs ${onChainLabel}`
       );
     }
 
@@ -150,16 +205,16 @@ async function main() {
 
   // Pick an item this worker has not answered yet, so reruns work.
   let itemId = 0n;
-  while (await read("hasLabeled", [TASK_ID, workerId, itemId])) itemId++;
+  while (await read("hasLabeled", [TASK, workerId, itemId])) itemId++;
 
   const answer = 1;
   const challenge = (await read("labelChallenge", [
-    TASK_ID,
+    TASK,
     itemId,
     answer,
   ])) as Hex;
   const { hash, gasUsed } = await send("submitLabel", [
-    TASK_ID,
+    TASK,
     itemId,
     answer,
     workerId,
@@ -185,7 +240,7 @@ async function main() {
     wrong
   );
   let nextItem = itemId + 1n;
-  while (await read("hasLabeled", [TASK_ID, workerId, nextItem])) nextItem++;
+  while (await read("hasLabeled", [TASK, workerId, nextItem])) nextItem++;
 
   try {
     await publicClient.simulateContract({
@@ -193,7 +248,7 @@ async function main() {
       abi: taskPoolAbi,
       functionName: "submitLabel",
       args: [
-        TASK_ID,
+        TASK,
         nextItem,
         1,
         workerId,
@@ -215,10 +270,16 @@ async function main() {
   //    costs more gas than it moves, so the contract refuses below the floor.
   const minimum = (await read("MIN_WITHDRAWAL")) as bigint;
   let nextFree = itemId + 1n;
+  let guard = 0;
   while (((await read("balanceOf", [workerId])) as bigint) < minimum) {
-    while (await read("hasLabeled", [TASK_ID, workerId, nextFree])) nextFree++;
-    const c = (await read("labelChallenge", [TASK_ID, nextFree, 1])) as Hex;
-    await send("submitLabel", [TASK_ID, nextFree, 1, workerId, assertion(c)]);
+    if (++guard > 30) {
+      throw new Error(
+        "balance never reached the minimum — is this task paying on submit?"
+      );
+    }
+    while (await read("hasLabeled", [TASK, workerId, nextFree])) nextFree++;
+    const c = (await read("labelChallenge", [TASK, nextFree, 1])) as Hex;
+    await send("submitLabel", [TASK, nextFree, 1, workerId, assertion(c)]);
     nextFree++;
   }
   console.log(`topped up past the ${formatUnits(minimum, 6)} minimum`);

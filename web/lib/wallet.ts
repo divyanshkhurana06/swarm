@@ -11,7 +11,7 @@
  * relayer from being able to forge anything.
  */
 
-import type { Hex } from "viem";
+import { keccak256, toBytes, type Hex } from "viem";
 import { TASK_POOL, chain } from "./contracts";
 
 /** Matches EIP712.domainSeparator("Swarm", "1") in the contract. */
@@ -28,6 +28,13 @@ const types = {
     { name: "rewardPerLabel", type: "uint96" },
     { name: "amount", type: "uint128" },
     { name: "items", type: "uint32" },
+    { name: "mode", type: "uint8" },
+    { name: "quorum", type: "uint8" },
+  ],
+  SurveyAnswer: [
+    { name: "taskId", type: "uint256" },
+    { name: "itemId", type: "uint256" },
+    { name: "answerHash", type: "bytes32" },
   ],
   Label: [
     { name: "taskId", type: "uint256" },
@@ -50,7 +57,7 @@ export type SigningWallet = {
 
 async function signTypedData(
   wallet: SigningWallet,
-  primaryType: "Label" | "Withdraw" | "PostTask",
+  primaryType: "Label" | "Withdraw" | "PostTask" | "SurveyAnswer",
   message: Record<string, string>
 ): Promise<Hex> {
   const provider = await wallet.getEthereumProvider();
@@ -97,13 +104,31 @@ export function signPostTask(
   spec: string,
   rewardPerLabel: bigint,
   amount: bigint,
-  items: number
+  items: number,
+  mode: number,
+  quorum: number
 ): Promise<Hex> {
   return signTypedData(wallet, "PostTask", {
     spec,
     rewardPerLabel: rewardPerLabel.toString(),
     amount: amount.toString(),
     items: items.toString(),
+    mode: mode.toString(),
+    quorum: quorum.toString(),
+  });
+}
+
+/** The contract signs over the hash of the text, not the text itself. */
+export function signSurveyAnswer(
+  wallet: SigningWallet,
+  taskId: bigint,
+  itemId: bigint,
+  answer: string
+): Promise<Hex> {
+  return signTypedData(wallet, "SurveyAnswer", {
+    taskId: taskId.toString(),
+    itemId: itemId.toString(),
+    answerHash: keccak256(toBytes(answer)),
   });
 }
 

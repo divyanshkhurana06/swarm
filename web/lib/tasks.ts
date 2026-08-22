@@ -13,9 +13,17 @@ export const publicClient = createPublicClient({ chain, transport: http() });
 
 export type Item = { id: number; text: string };
 
+export enum Mode {
+  FirstCome = 0,
+  Majority = 1,
+  Survey = 2,
+}
+
 export type TaskSpec = {
   title: string;
   question: string;
+  /** "image" | "text" | "survey" -- presentation only; Mode is the contract's. */
+  kind?: string;
   answers: Record<string, string>;
   items: Item[];
 };
@@ -30,6 +38,8 @@ export type Task = {
   answers: number;
   open: boolean;
   itemCount: number;
+  mode: Mode;
+  quorum: number;
 };
 
 const read = <T,>(functionName: string, args: readonly unknown[] = []) =>
@@ -52,6 +62,8 @@ export async function loadTask(id: number): Promise<Task | null> {
         paidOut: bigint;
         labelCount: bigint;
         open: boolean;
+        mode: number;
+        quorum: number;
       }>("tasks", [BigInt(id)]),
       read<string>("taskSpec", [BigInt(id)]),
       read<number>("itemCount", [BigInt(id)]),
@@ -70,6 +82,8 @@ export async function loadTask(id: number): Promise<Task | null> {
       answers: Number(raw.labelCount),
       open: raw.open,
       itemCount: Number(items),
+      mode: Number(raw.mode) as Mode,
+      quorum: Number(raw.quorum),
     };
   } catch {
     return null;
@@ -82,6 +96,15 @@ export async function loadTasks(): Promise<Task[]> {
     Array.from({ length: count }, (_, i) => loadTask(i))
   );
   return tasks.filter((t): t is Task => t !== null).reverse();
+}
+
+/** Questions a survey worker still has to answer. */
+export async function surveyProgress(task: Task, workerId: Hex) {
+  const [answered, paid] = await Promise.all([
+    read<number>("answeredCount", [BigInt(task.id), workerId]),
+    read<boolean>("surveyPaid", [BigInt(task.id), workerId]),
+  ]);
+  return { answered: Number(answered), paid };
 }
 
 /** Items this worker has not answered yet. */
@@ -97,6 +120,20 @@ export async function unansweredItems(
     )
   );
   return checks.filter((i): i is Item => i !== null);
+}
+
+/** Completed survey responses, question by question, per respondent. */
+export async function loadSurveyResponses(task: Task) {
+  const ids = await read<readonly Hex[]>("respondents", [BigInt(task.id)]);
+  return Promise.all(
+    ids.map(async (workerId) => ({
+      workerId,
+      answers: await read<readonly string[]>("surveyResponse", [
+        BigInt(task.id),
+        workerId,
+      ]),
+    }))
+  );
 }
 
 /** The labelled dataset: per-item vote counts, straight from the contract. */

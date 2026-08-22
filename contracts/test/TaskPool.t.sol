@@ -31,6 +31,8 @@ contract TaskPoolTest is Test {
         usd.mint(requester, FUNDING);
         usd.approve(address(pool), type(uint256).max);
         taskId = pool.createTask("ipfs://manifest", REWARD, FUNDING);
+        // createTask is FirstCome with quorum 1; the shared tests answer each
+        // item once, which is exactly that.
         vm.stopPrank();
 
         workerId = _register();
@@ -228,10 +230,19 @@ contract TaskPoolTest is Test {
         '{"title":"Sentiment","question":"Positive?","answers":{"0":"No","1":"Yes"},"items":[{"id":0,"text":"great"},{"id":1,"text":"awful"}]}';
 
     function _postTask(uint128 amount, uint32 items) internal returns (uint256) {
+        return _postTask(amount, items, TaskPool.Mode.FirstCome, 1);
+    }
+
+    function _postTask(uint128 amount, uint32 items, TaskPool.Mode mode, uint8 quorum)
+        internal
+        returns (uint256)
+    {
         address poster = vm.addr(WALLET_PK);
-        bytes32 d = pool.postDigest(SPEC, REWARD, amount, items);
+        bytes32 d = pool.postDigest(SPEC, REWARD, amount, items, uint8(mode), quorum);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(WALLET_PK, d);
-        return pool.postTaskSponsored(SPEC, REWARD, amount, items, poster, abi.encodePacked(r, s, v));
+        return pool.postTaskSponsored(
+            SPEC, REWARD, amount, items, uint8(mode), quorum, poster, abi.encodePacked(r, s, v)
+        );
     }
 
     function test_PostTask_IsVisibleOnChain() public {
@@ -246,15 +257,17 @@ contract TaskPoolTest is Test {
     }
 
     function test_PostTask_RevertWhen_SignatureIsFromSomeoneElse() public {
-        bytes32 d = pool.postDigest(SPEC, REWARD, 1_000_000, 2);
+        bytes32 d = pool.postDigest(SPEC, REWARD, 1_000_000, 2, 0, 1);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(0xB0B, d);
 
         vm.expectRevert(TaskPool.BadSignature.selector);
-        pool.postTaskSponsored(SPEC, REWARD, 1_000_000, 2, vm.addr(WALLET_PK), abi.encodePacked(r, s, v));
+        pool.postTaskSponsored(
+            SPEC, REWARD, 1_000_000, 2, 0, 1, vm.addr(WALLET_PK), abi.encodePacked(r, s, v)
+        );
     }
 
     function test_Results_AreTheLabelledDataset() public {
-        uint256 id = _postTask(1_000_000, 2);
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 2);
         address wallet = vm.addr(WALLET_PK);
 
         // Two workers disagree on item 0 and agree on item 1.
@@ -269,6 +282,206 @@ contract TaskPoolTest is Test {
         assertEq(ones[0], 1, "one worker said yes on item 0");
         assertEq(zeros[1], 1, "item 1 answered once");
         assertEq(ones[1], 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // Task modes: the three kinds of work pay differently on purpose
+    // ---------------------------------------------------------------------
+
+    uint256 internal constant PK_A = 0xA;
+    uint256 internal constant PK_B = 0xB;
+    uint256 internal constant PK_C = 0xC;
+
+    function _answerAs(uint256 pk, uint256 task, uint256 item, uint8 ans) internal {
+        address who = vm.addr(pk);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, pool.labelDigest(task, item, ans));
+        pool.submitLabelFor(task, item, ans, who, abi.encodePacked(r, s, v));
+    }
+
+    function _earnedBy(uint256 pk) internal view returns (uint256) {
+        return pool.earned(pool.idOfAddress(vm.addr(pk)));
+    }
+
+    // --- Majority ---------------------------------------------------------
+
+    function test_Majority_PaysNobodyUntilQuorum() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.Majority, 3);
+
+        _answerAs(PK_A, id, 0, 1);
+        _answerAs(PK_B, id, 0, 1);
+
+        // Two of three in: the item is unresolved, so nothing is owed yet.
+        assertFalse(pool.resolved(id, 0));
+        assertEq(_earnedBy(PK_A), 0, "held until the crowd has spoken");
+        assertEq(_earnedBy(PK_B), 0);
+        assertEq(pool.totalPaid(), 0);
+    }
+
+    function test_Majority_PaysOnlyTheMajority() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.Majority, 3);
+
+        _answerAs(PK_A, id, 0, 1); // with the crowd
+        _answerAs(PK_B, id, 0, 1); // with the crowd
+        _answerAs(PK_C, id, 0, 0); // against it
+
+        assertTrue(pool.resolved(id, 0), "quorum reached, item settles");
+        assertEq(_earnedBy(PK_A), REWARD, "agreed with the majority");
+        assertEq(_earnedBy(PK_B), REWARD, "agreed with the majority");
+        assertEq(_earnedBy(PK_C), 0, "disagreed, so earned nothing");
+        assertEq(pool.totalPaid(), REWARD * 2, "the odd one out is not paid for");
+    }
+
+    function test_Majority_MinorityStillCannotReanswer() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.Majority, 3);
+        _answerAs(PK_A, id, 0, 1);
+        _answerAs(PK_B, id, 0, 1);
+        _answerAs(PK_C, id, 0, 0);
+
+        address who = vm.addr(PK_C);
+        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(PK_C, pool.labelDigest(id, 0, 1));
+
+        // Losing the vote must not become a free retry.
+        vm.expectRevert(TaskPool.AlreadyLabeled.selector);
+        pool.submitLabelFor(id, 0, 1, who, abi.encodePacked(r, sg, v));
+    }
+
+    function test_Majority_RevertWhen_ItemIsFull() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.Majority, 2);
+        _answerAs(PK_A, id, 0, 1);
+        _answerAs(PK_B, id, 0, 1);
+
+        address who = vm.addr(PK_C);
+        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(PK_C, pool.labelDigest(id, 0, 1));
+
+        // The requester asked for two opinions and has two.
+        vm.expectRevert(TaskPool.ItemFull.selector);
+        pool.submitLabelFor(id, 0, 1, who, abi.encodePacked(r, sg, v));
+    }
+
+    // --- FirstCome --------------------------------------------------------
+
+    function test_FirstCome_PaysImmediately() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 2);
+
+        _answerAs(PK_A, id, 0, 1);
+        assertEq(_earnedBy(PK_A), REWARD, "objective work pays on the spot");
+
+        // Disagreeing costs nothing here: the task is not a judgement call.
+        _answerAs(PK_B, id, 0, 0);
+        assertEq(_earnedBy(PK_B), REWARD);
+    }
+
+    function test_FirstCome_StopsAtQuorum() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 1);
+        _answerAs(PK_A, id, 0, 1);
+
+        address who = vm.addr(PK_B);
+        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(PK_B, pool.labelDigest(id, 0, 1));
+
+        vm.expectRevert(TaskPool.ItemFull.selector);
+        pool.submitLabelFor(id, 0, 1, who, abi.encodePacked(r, sg, v));
+    }
+
+    // --- Survey -----------------------------------------------------------
+
+    function _answerSurvey(uint256 pk, uint256 task, uint256 item, string memory text) internal {
+        address who = vm.addr(pk);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, pool.surveyDigest(task, item, text));
+        pool.submitSurveyFor(task, item, text, who, abi.encodePacked(r, s, v));
+    }
+
+    function test_Survey_PaysOnlyOnCompletion() public {
+        uint256 id = _postTask(1_000_000, 3, TaskPool.Mode.Survey, 1);
+
+        _answerSurvey(PK_A, id, 0, "Mostly the price.");
+        assertEq(_earnedBy(PK_A), 0, "a half-finished survey is worth nothing");
+
+        _answerSurvey(PK_A, id, 1, "Twice a week.");
+        assertEq(_earnedBy(PK_A), 0, "still not finished");
+
+        _answerSurvey(PK_A, id, 2, "I would recommend it.");
+        assertEq(_earnedBy(PK_A), REWARD * 3, "paid for the whole response at once");
+    }
+
+    function test_Survey_RespondentsAreEnumerable() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.Survey, 1);
+        _answerSurvey(PK_A, id, 0, "first answer");
+        assertEq(pool.respondentCount(id), 0, "not listed until finished");
+
+        _answerSurvey(PK_A, id, 1, "second answer");
+        assertEq(pool.respondentCount(id), 1, "listed on completion");
+        assertEq(pool.respondents(id)[0], pool.idOfAddress(vm.addr(PK_A)));
+
+        // A requester with no way to enumerate responses cannot read what they
+        // paid for, so this is the difference between a survey and a void.
+        _answerSurvey(PK_B, id, 0, "b first");
+        _answerSurvey(PK_B, id, 1, "b second");
+        assertEq(pool.respondentCount(id), 2);
+    }
+
+    function test_Survey_ResponseIsReadableByTheRequester() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.Survey, 1);
+        _answerSurvey(PK_A, id, 0, "Because it was cheaper.");
+        _answerSurvey(PK_A, id, 1, "About six months.");
+
+        string[] memory answers = pool.surveyResponse(id, pool.idOfAddress(vm.addr(PK_A)));
+        assertEq(answers[0], "Because it was cheaper.");
+        assertEq(answers[1], "About six months.");
+    }
+
+    function test_Survey_RevertWhen_AnswerIsEmpty() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.Survey, 1);
+        address who = vm.addr(PK_A);
+        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(PK_A, pool.surveyDigest(id, 0, ""));
+
+        vm.expectRevert(TaskPool.EmptyAnswer.selector);
+        pool.submitSurveyFor(id, 0, "", who, abi.encodePacked(r, sg, v));
+    }
+
+    function test_Survey_RevertWhen_TextIsTamperedWith() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.Survey, 1);
+        address who = vm.addr(PK_A);
+
+        // Signed one answer, submitted another.
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(PK_A, pool.surveyDigest(id, 0, "yes"));
+
+        vm.expectRevert(TaskPool.BadSignature.selector);
+        pool.submitSurveyFor(id, 0, "no", who, abi.encodePacked(r, s, v));
+    }
+
+    function test_Survey_RevertWhen_UsedAsALabellingTask() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.Survey, 1);
+        address who = vm.addr(PK_A);
+        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(PK_A, pool.labelDigest(id, 0, 1));
+
+        vm.expectRevert(TaskPool.WrongMode.selector);
+        pool.submitLabelFor(id, 0, 1, who, abi.encodePacked(r, sg, v));
+    }
+
+    function test_Labelling_RevertWhen_UsedAsASurvey() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.Majority, 3);
+        address who = vm.addr(PK_A);
+        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(PK_A, pool.surveyDigest(id, 0, "whatever"));
+
+        vm.expectRevert(TaskPool.WrongMode.selector);
+        pool.submitSurveyFor(id, 0, "whatever", who, abi.encodePacked(r, sg, v));
+    }
+
+    // --- escrow -----------------------------------------------------------
+
+    function test_UnspentEscrowGoesBackToTheRequester() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.Majority, 3);
+        _answerAs(PK_A, id, 0, 1);
+        _answerAs(PK_B, id, 0, 1);
+        _answerAs(PK_C, id, 0, 0);
+
+        uint256 spent = REWARD * 2; // the minority was never paid for
+        address poster = vm.addr(WALLET_PK);
+
+        vm.prank(poster);
+        pool.closeTask(id);
+
+        assertEq(usd.balanceOf(poster), 1_000_000 - spent, "requester keeps what wasn't earned");
     }
 
     // ---------------------------------------------------------------------
