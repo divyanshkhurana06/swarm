@@ -16,9 +16,9 @@ import {
   type Item,
   type Task,
 } from "@/lib/tasks";
-import { Badge, Shell, WalletBar } from "@/components/ui";
+import { Badge, MoneyPop, Shell, WalletBar } from "@/components/ui";
 
-type Paid = { hash: Hex; reward: bigint };
+type Pop = { id: number; label: string };
 
 const CONFIGURED = Boolean(process.env.NEXT_PUBLIC_PRIVY_APP_ID);
 const money = (v: bigint) => `$${formatUnits(v, DUSD_DECIMALS)}`;
@@ -57,7 +57,8 @@ function Worker() {
   const [earned, setEarned] = useState<bigint>(0n);
   const [pendingVotes, setPendingVotes] = useState(0);
   const [text, setText] = useState("");
-  const [feed, setFeed] = useState<Paid[]>([]);
+  const [pops, setPops] = useState<Pop[]>([]);
+  const [bump, setBump] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -117,11 +118,23 @@ function Worker() {
     return () => clearInterval(t);
   }, [workerId]);
 
-  const advance = (reward: bigint, hash: Hex, credited: boolean) => {
+  const popId = useRef(0);
+
+  /** Shows the payment, then cleans itself up once the animation is done. */
+  const showPop = (label: string) => {
+    const id = ++popId.current;
+    setPops((p) => [...p, { id, label }]);
+    setTimeout(() => setPops((p) => p.filter((x) => x.id !== id)), 1200);
+  };
+
+  const advance = (reward: bigint, credited: boolean) => {
     setCursor((c) => c + 1);
     setText("");
-    if (credited) setEarned((e) => e + reward);
-    setFeed((f) => [{ hash, reward }, ...f].slice(0, 5));
+    if (credited) {
+      setEarned((e) => e + reward);
+      setBump((b) => b + 1);
+      showPop(`+${money(reward)}`);
+    }
   };
 
   const submit = useCallback(
@@ -186,7 +199,12 @@ function Worker() {
         const json = await res.json();
         if (!res.ok) throw new Error(json.error ?? "Submission failed");
 
-        advance(reward, json.hash as Hex, paysNow);
+        advance(reward, paysNow);
+        if (!paysNow) {
+          // Majority holds the money until the crowd agrees and a survey pays
+          // on completion, so "+$0.02" here would be a lie.
+          showPop(task.mode === Mode.Majority ? "locked in" : "saved");
+        }
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         if (/AlreadyLabeled/i.test(message)) {
@@ -335,6 +353,7 @@ function Worker() {
   const total = queue?.length ?? 0;
   const isSurvey = task.mode === Mode.Survey;
   const isImage = task.spec.kind === "image";
+  const upcoming = isImage ? (queue ?? []).slice(cursor + 1, cursor + 4) : [];
 
   return (
     <Shell>
@@ -355,7 +374,7 @@ function Worker() {
         </div>
       </div>
 
-      <Earnings earned={earned} pendingVotes={pendingVotes} />
+      <Earnings earned={earned} pendingVotes={pendingVotes} bump={bump} />
 
       {total > 0 && (
         <div className="h-1 w-full overflow-hidden rounded-full bg-zinc-900">
@@ -371,20 +390,7 @@ function Worker() {
           <p className="text-sm text-zinc-500">{task.spec.question}</p>
 
           {isImage ? (
-            <div
-              key={item.id}
-              className="animate-pop overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={item.text}
-                alt="Item to label"
-                className="h-64 w-full bg-zinc-950 object-contain"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.opacity = "0.2";
-                }}
-              />
-            </div>
+            <ImageCard key={item.id} src={item.text} />
           ) : (
             <div
               key={item.id}
@@ -393,6 +399,17 @@ function Worker() {
               {item.text}
             </div>
           )}
+
+          <MoneyPop pops={pops} />
+
+          {/* Fetch the next few so tapping through doesn't stall on the
+              network -- an image task lives or dies on how fast it feels. */}
+          <div className="hidden">
+            {upcoming.map((u) => (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img key={u.id} src={u.text} alt="" />
+            ))}
+          </div>
 
           {isSurvey ? (
             <div className="space-y-3">
@@ -462,24 +479,6 @@ function Worker() {
         </div>
       )}
 
-      {feed.length > 0 && (
-        <div className="space-y-1.5">
-          {feed.map((p) => (
-            <a
-              key={p.hash}
-              href={explorerTx(p.hash)}
-              target="_blank"
-              rel="noreferrer"
-              className="animate-slide-in flex items-center justify-between rounded-lg bg-zinc-900/60 px-3 py-2 font-mono text-xs text-zinc-500"
-            >
-              <span className="text-emerald-500">
-                {task.mode === Mode.FirstCome ? `+${money(p.reward)}` : "submitted"}
-              </span>
-              <span>{p.hash.slice(0, 10)}…</span>
-            </a>
-          ))}
-        </div>
-      )}
 
       <button
         onClick={logout}
@@ -492,12 +491,53 @@ function Worker() {
   );
 }
 
+/**
+ * An image to label.
+ *
+ * Holds its own loading and failure state: a broken URL has to be visibly
+ * broken, because a worker cannot honestly answer "is there a car in this"
+ * about an image that never loaded.
+ */
+function ImageCard({ src }: { src: string }) {
+  const [state, setState] = useState<"loading" | "ok" | "error">("loading");
+
+  return (
+    <div className="animate-pop relative overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950">
+      {state === "loading" && (
+        <div className="absolute inset-0 flex items-center justify-center text-sm text-zinc-600">
+          Loading image…
+        </div>
+      )}
+      {state === "error" && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-6 text-center">
+          <span className="text-sm text-amber-400">This image didn&apos;t load</span>
+          <span className="text-xs text-zinc-600">
+            Skip it rather than guessing
+          </span>
+        </div>
+      )}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt="Item to label"
+        className={`h-72 w-full object-contain transition-opacity duration-200 ${
+          state === "ok" ? "opacity-100" : "opacity-0"
+        }`}
+        onLoad={() => setState("ok")}
+        onError={() => setState("error")}
+      />
+    </div>
+  );
+}
+
 function Earnings({
   earned,
   pendingVotes,
+  bump,
 }: {
   earned: bigint;
   pendingVotes?: number;
+  bump?: number;
 }) {
   return (
     <div className="flex items-end justify-between">
@@ -505,7 +545,12 @@ function Earnings({
         <div className="text-xs uppercase tracking-widest text-zinc-500">
           Earned
         </div>
-        <div className="text-3xl font-semibold tabular-nums text-emerald-400">
+        <div
+          key={bump}
+          className={`text-3xl font-semibold tabular-nums text-emerald-400 ${
+            bump ? "animate-bump" : ""
+          }`}
+        >
           {money(earned)}
         </div>
       </div>

@@ -142,3 +142,26 @@ export function Badge({
     </span>
   );
 }
+
+/**
+ * The "+$0.02" that floats up when a payment lands.
+ *
+ * A number quietly incrementing in a corner does not read as being paid. This
+ * is the only feedback most workers will consciously notice, which is why it
+ * replaced the scrolling list of transaction hashes -- nobody was reading
+ * those, and they made every answer feel like a debug log.
+ */
+export function MoneyPop({ pops }: { pops: { id: number; label: string }[] }) {
+  return (
+    <div className="pointer-events-none relative h-0">
+      {pops.map((p) => (
+        <span
+          key={p.id}
+          className="animate-float-up absolute left-1/2 -top-2 whitespace-nowrap text-2xl font-semibold text-emerald-400 drop-shadow"
+        >
+          {p.label}
+        </span>
+      ))}
+    </div>
+  );
+}

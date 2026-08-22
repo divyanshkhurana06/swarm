@@ -9,6 +9,12 @@ export const monadTestnet = defineChain({
   blockExplorers: {
     default: { name: "MonadVision", url: "https://testnet.monadvision.com" },
   },
+  contracts: {
+    // Canonical Multicall3. viem will not batch reads unless the chain
+    // declares it, and without batching the task list fires ~30 requests at
+    // once and gets rate limited.
+    multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" as const },
+  },
   testnet: true,
 });
 
@@ -20,6 +26,12 @@ export const monadMainnet = defineChain({
   rpcUrls: { default: { http: ["https://rpc.monad.xyz"] } },
   blockExplorers: {
     default: { name: "MonadVision", url: "https://monadvision.com" },
+  },
+  contracts: {
+    // Canonical Multicall3. viem will not batch reads unless the chain
+    // declares it, and without batching the task list fires ~30 requests at
+    // once and gets rate limited.
+    multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" as const },
   },
 });
 

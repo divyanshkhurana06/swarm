@@ -9,7 +9,24 @@ import { chain, TASK_POOL, taskPoolAbi } from "./contracts";
  * still be running tomorrow. Reading is just a contract call.
  */
 
-export const publicClient = createPublicClient({ chain, transport: http() });
+/**
+ * Reads are batched through Multicall3.
+ *
+ * Loading a task takes three calls, and the list loads every task. Fired
+ * individually that is thirty-odd requests at once, which the public RPC rate
+ * limits -- and a rate-limited read looked exactly like a task that did not
+ * exist, so the list flickered as tasks dropped out and came back. Batching
+ * turns the whole page into one or two requests.
+ */
+export const publicClient = createPublicClient({
+  chain,
+  transport: http(undefined, {
+    batch: { wait: 16 },
+    retryCount: 3,
+    retryDelay: 200,
+  }),
+  batch: { multicall: { wait: 16 } },
+});
 
 export type Item = { id: number; text: string };
 
@@ -85,17 +102,42 @@ export async function loadTask(id: number): Promise<Task | null> {
       mode: Number(raw.mode) as Mode,
       quorum: Number(raw.quorum),
     };
-  } catch {
-    return null;
+  } catch (e) {
+    // Distinguish "no such task" from "the RPC refused us". Swallowing the
+    // second is what made the list flicker.
+    console.error(`loadTask(${id}) failed:`, e);
+    throw e;
   }
 }
 
 export async function loadTasks(): Promise<Task[]> {
   const count = Number(await read<bigint>("taskCount"));
-  const tasks = await Promise.all(
+  const settled = await Promise.allSettled(
     Array.from({ length: count }, (_, i) => loadTask(i))
   );
-  return tasks.filter((t): t is Task => t !== null).reverse();
+
+  const tasks = settled
+    .filter(
+      (r): r is PromiseFulfilledResult<Task | null> => r.status === "fulfilled"
+    )
+    .map((r) => r.value)
+    .filter((t): t is Task => t !== null);
+
+  const failed = settled.filter((r) => r.status === "rejected").length;
+  if (failed > 0 && tasks.length === 0) {
+    // Everything failed: report it rather than rendering an empty marketplace.
+    throw new Error(`could not read any of ${count} tasks`);
+  }
+
+  return tasks.reverse();
+}
+
+/** Tasks this address posted, newest first. */
+export async function tasksBy(requester: string): Promise<Task[]> {
+  const all = await loadTasks();
+  return all.filter(
+    (t) => t.requester.toLowerCase() === requester.toLowerCase()
+  );
 }
 
 /** Questions a survey worker still has to answer. */

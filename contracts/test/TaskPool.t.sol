@@ -175,8 +175,11 @@ contract TaskPoolTest is Test {
         address cashOut = address(0xCA5);
         uint256 receiptId = pool.withdrawFor(wallet, cashOut, _signEoa(pool.withdrawDigest(wallet, cashOut)));
 
-        assertEq(usd.balanceOf(cashOut), REWARD * 10);
-        assertEq(pool.receipts().ownerOf(receiptId), cashOut, "same receipt NFT either way");
+        assertEq(usd.balanceOf(cashOut), REWARD * 10, "one ledger, one payout");
+
+        // Wallet workers collect their receipt when they finish a task, so
+        // cashing out does not mint a second one.
+        assertEq(receiptId, 0, "no duplicate receipt on cash-out");
     }
 
     function test_RevertWhen_EmbeddedWalletSignatureIsForAnotherAnswer() public {
@@ -465,6 +468,65 @@ contract TaskPoolTest is Test {
 
         vm.expectRevert(TaskPool.WrongMode.selector);
         pool.submitSurveyFor(id, 0, "whatever", who, abi.encodePacked(r, sg, v));
+    }
+
+    // --- completion receipts ----------------------------------------------
+
+    function test_Receipt_MintsWhenTheWorkerFinishesATask() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 1);
+        address who = vm.addr(PK_A);
+        WorkReceipt receipts = pool.receipts();
+
+        _answerAs(PK_A, id, 0, 1);
+        assertEq(receipts.balanceOf(who), 0, "half a task earns no receipt");
+
+        _answerAs(PK_A, id, 1, 0);
+        assertEq(receipts.balanceOf(who), 1, "finishing the task mints one");
+    }
+
+    function test_Receipt_MintsOncePerTask() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 1);
+        address who = vm.addr(PK_A);
+
+        _answerAs(PK_A, id, 0, 1);
+        _answerAs(PK_A, id, 1, 0);
+
+        uint256 second = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 1);
+        _answerAs(PK_A, second, 0, 1);
+        _answerAs(PK_A, second, 1, 1);
+
+        assertEq(
+            pool.receipts().balanceOf(who), 2, "one receipt per finished task"
+        );
+    }
+
+    function test_Receipt_MintsOnSurveyCompletion() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.Survey, 1);
+        address who = vm.addr(PK_A);
+
+        _answerSurvey(PK_A, id, 0, "first");
+        assertEq(pool.receipts().balanceOf(who), 0);
+
+        _answerSurvey(PK_A, id, 1, "second");
+        assertEq(pool.receipts().balanceOf(who), 1, "completed survey mints");
+    }
+
+    function test_Receipt_CashOutDoesNotMintAgainForWalletWorkers() public {
+        uint256 id = _postTask(20_000_000, 12, TaskPool.Mode.FirstCome, 1);
+        address who = vm.addr(PK_A);
+        for (uint256 i = 0; i < 12; i++) _answerAs(PK_A, id, i, 1);
+
+        uint256 afterTask = pool.receipts().balanceOf(who);
+        assertEq(afterTask, 1);
+
+        address cashOut = address(0xCA5);
+        (uint8 v, bytes32 r, bytes32 sg) =
+            vm.sign(PK_A, pool.withdrawDigest(who, cashOut));
+        pool.withdrawFor(who, cashOut, abi.encodePacked(r, sg, v));
+
+        assertEq(
+            pool.receipts().balanceOf(who), afterTask, "no duplicate on cash-out"
+        );
     }
 
     // --- escrow -----------------------------------------------------------

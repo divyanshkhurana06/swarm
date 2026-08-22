@@ -8,9 +8,9 @@ Built at [Monad Blitz Hyderabad V3](https://blitz.devnads.com/events/monad-blitz
 
 - **Live demo:** _TODO — add the deployed URL_
 - **Projector dashboard:** _TODO — `<url>/dashboard`_
-- **TaskPool (Monad Testnet):** [`0xE25edE1AFEDd4DD0Cac76dEFE62aD466242F9B98`](https://testnet.monadvision.com/address/0xE25edE1AFEDd4DD0Cac76dEFE62aD466242F9B98) — verified
-- **DemoUSD (Monad Testnet):** [`0x5448F5815AAc45f8Cb195B562A51E2Ad253906c8`](https://testnet.monadvision.com/address/0x5448F5815AAc45f8Cb195B562A51E2Ad253906c8) — verified
-- **WorkReceipt NFT (Monad Testnet):** [`0xEf48d88af6e71CD494b66681Cd4E807739918759`](https://testnet.monadvision.com/address/0xEf48d88af6e71CD494b66681Cd4E807739918759) — verified
+- **TaskPool (Monad Testnet):** [`0xffa29eb7627c521Fd6e30E12C8a144bA44A35823`](https://testnet.monadvision.com/address/0xffa29eb7627c521Fd6e30E12C8a144bA44A35823) — verified
+- **DemoUSD (Monad Testnet):** [`0x482F45bda093c9e9ddB362EF519Fc9C0deb00c2B`](https://testnet.monadvision.com/address/0x482F45bda093c9e9ddB362EF519Fc9C0deb00c2B) — verified
+- **WorkReceipt NFT (Monad Testnet):** [`0xc85374f3cC24dDECBBAE4214491a2fAd599Fb7F0`](https://testnet.monadvision.com/address/0xc85374f3cC24dDECBBAE4214491a2fAd599Fb7F0) — verified
 - **Task id:** `0` · **Reward:** 0.005 DUSD (half a cent) per answer
 
 ---
@@ -79,7 +79,7 @@ wastes both the requester's money and the workers' time.
 - **Every answer.** The intent (`taskId`, `itemId`, `answer`) is hashed into the WebAuthn challenge. The contract recomputes that challenge and rejects anything else — so a signature for "yes" is not a signature for "no", and a captured signature cannot be replayed against another action, contract, or chain.
 - **Gas.** Workers hold no MON, so a relayer submits their signed payloads and pays. This is safe because the *contract* verifies the worker's signature: the relayer cannot forge an answer, redirect a payout, or touch a balance. The worst it can do is refuse to deliver.
 - **Payouts.** Earnings accrue to an internal ledger keyed by public key, then settle in a single `withdraw` to any address the worker names. Transferring on every answer would mean paying ERC-20 gas hundreds of times to move a couple of dollars. Cash-out has a floor of 0.05 DUSD, because sweeping a few cents costs more gas than it moves.
-- **Receipts.** Cashing out mints a `WorkReceipt` NFT to the same address, recording the amount and the number of answers behind it. A stablecoin payout is invisible in a wallet until the token is manually imported, which makes a real payment feel like nothing happened; the NFT shows up on its own. Its artwork is generated on-chain as an SVG data URI, so nothing has to stay hosted for it to keep rendering.
+- **Receipts.** Finishing a task mints a `WorkReceipt` NFT to the same address, recording the amount and the number of answers behind it. A stablecoin payout is invisible in a wallet until the token is manually imported, which makes a real payment feel like nothing happened; the NFT shows up on its own. Its artwork is generated on-chain as an SVG data URI, so nothing has to stay hosted for it to keep rendering.
 
 ## Repository layout
 
@@ -91,7 +91,7 @@ contracts/
   src/WorkReceipt.sol   cash-out receipt NFT, artwork generated on-chain
   src/EIP712.sol        typed-data signing for embedded wallets
   src/Base64.sol        encoder for the NFT's inline metadata
-  test/TaskPool.t.sol   38 tests, real P256 and secp256k1 signatures
+  test/TaskPool.t.sol   42 tests, real P256 and secp256k1 signatures
   script/webauthn.js    generates real WebAuthn assertions for those tests
   script/Deploy.s.sol   deploys and seeds a funded task
 web/
@@ -164,7 +164,7 @@ Open `http://localhost:3000` on a phone with Face ID or a fingerprint reader, an
 ### 3. Tests
 
 ```bash
-cd contracts && forge test --odyssey -vv    # 38 contract tests, local
+cd contracts && forge test --odyssey -vv    # 42 contract tests, local
 cd web && npm test                          # DER parser + challenge encoding
 cd web && npx tsx scripts/e2e-onchain.ts    # passkey flow against deployed contracts
 cd web && npx tsx scripts/e2e-modes.ts      # all three task modes, live chain

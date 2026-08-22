@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { formatUnits, type Hex } from "viem";
 import { DUSD_DECIMALS, explorerTx } from "@/lib/contracts";
 import { signPostTask, type SigningWallet } from "@/lib/wallet";
-import { publicClient } from "@/lib/tasks";
+import { publicClient, tasksBy, type Task } from "@/lib/tasks";
 import { extractPdfText, looksLikeQuestion, splitIntoQuestions } from "@/lib/survey";
 import { Shell, Field, Input, WalletBar } from "@/components/ui";
 
@@ -30,6 +30,8 @@ const KINDS: {
   blurb: string;
   placeholder: string;
   defaultQuorum: number;
+  defaultCents: string;
+  hints: { title: string; question: string; no: string; yes: string };
 }[] = [
   {
     key: "image",
@@ -38,7 +40,16 @@ const KINDS: {
     blurb: "Objective and quick. First to answer is paid, no waiting.",
     placeholder:
       "https://images.example.com/street-1.jpg\nhttps://images.example.com/street-2.jpg",
-    defaultQuorum: 1,
+    defaultQuorum: 2,
+    // Two cents an answer: enough that ten images is worth twenty, which is
+    // the point at which doing it feels like earning rather than a demo.
+    defaultCents: "2",
+    hints: {
+      title: "Street scenes",
+      question: "Is there a car in this image?",
+      no: "No car",
+      yes: "Car",
+    },
   },
   {
     key: "text",
@@ -49,6 +60,15 @@ const KINDS: {
     placeholder:
       "The site is down for all our users right now.\nHow do I change my avatar?\nBilling charged me twice this month.",
     defaultQuorum: 3,
+    // Priced above images: the worker carries the risk of disagreeing with
+    // the crowd, so the expected value has to survive that.
+    defaultCents: "3",
+    hints: {
+      title: "Support ticket triage",
+      question: "Is this ticket urgent?",
+      no: "Not urgent",
+      yes: "Urgent",
+    },
   },
   {
     key: "survey",
@@ -59,6 +79,15 @@ const KINDS: {
     placeholder:
       "What made you choose us over the alternatives?\nHow often do you use the product?\nWhat would make you recommend it to a colleague?",
     defaultQuorum: 1,
+    // Written answers take a minute of real thought, so they are priced an
+    // order of magnitude above a tap.
+    defaultCents: "15",
+    hints: {
+      title: "Customer research",
+      question: "Answer in your own words",
+      no: "",
+      yes: "",
+    },
   },
 ];
 
@@ -87,12 +116,12 @@ function PostTask() {
   const [kind, setKind] = useState<Kind>("text");
   const kindInfo = KINDS.find((k) => k.key === kind)!;
 
-  const [title, setTitle] = useState("Support ticket triage");
-  const [question, setQuestion] = useState("Is this ticket urgent?");
-  const [labelNo, setLabelNo] = useState("Not urgent");
-  const [labelYes, setLabelYes] = useState("Urgent");
-  const [raw, setRaw] = useState(KINDS[1].placeholder);
-  const [rewardCents, setRewardCents] = useState("0.5");
+  const [title, setTitle] = useState("");
+  const [question, setQuestion] = useState("");
+  const [labelNo, setLabelNo] = useState("");
+  const [labelYes, setLabelYes] = useState("");
+  const [raw, setRaw] = useState("");
+  const [rewardCents, setRewardCents] = useState("3");
   const [quorum, setQuorum] = useState(3);
 
   const [extracting, setExtracting] = useState(false);
@@ -100,7 +129,14 @@ function PostTask() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ hash: Hex } | null>(null);
+  const [mine, setMine] = useState<Task[] | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // A requester who cannot find the answers they paid for has bought nothing.
+  useEffect(() => {
+    if (!address) return;
+    tasksBy(address).then(setMine).catch(() => setMine([]));
+  }, [address, done]);
 
   const items = useMemo(() => {
     if (kind === "survey") return splitIntoQuestions(raw);
@@ -123,25 +159,13 @@ function PostTask() {
   // Surveys pay per completed response, which is the same arithmetic.
   const funding = rewardUnits * BigInt(items.length * quorum);
 
+  // Switching type changes what the fields mean, not what is in them. The
+  // requester's own words survive; only the pricing defaults move.
   const switchKind = (next: Kind) => {
     const info = KINDS.find((k) => k.key === next)!;
     setKind(next);
     setQuorum(info.defaultQuorum);
-    setRaw(info.placeholder);
-    if (next === "image") {
-      setTitle("Street scenes");
-      setQuestion("Is there a car in this image?");
-      setLabelNo("No car");
-      setLabelYes("Car");
-    } else if (next === "text") {
-      setTitle("Support ticket triage");
-      setQuestion("Is this ticket urgent?");
-      setLabelNo("Not urgent");
-      setLabelYes("Urgent");
-    } else {
-      setTitle("Customer research");
-      setQuestion("Answer in your own words");
-    }
+    setRewardCents(info.defaultCents);
   };
 
   const onFile = async (file: File) => {
@@ -174,6 +198,14 @@ function PostTask() {
     }
     if (rewardUnits === 0n) {
       setError("Set a reward above zero");
+      return;
+    }
+    if (!title.trim() || !question.trim()) {
+      setError("Give the batch a name and tell workers what to decide");
+      return;
+    }
+    if (kind !== "survey" && (!labelNo.trim() || !labelYes.trim())) {
+      setError("Name both answers so workers know what they're choosing");
       return;
     }
 
@@ -313,6 +345,33 @@ function PostTask() {
         </Link>
       </div>
 
+      {mine && mine.length > 0 && (
+        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
+          <div className="text-xs uppercase tracking-widest text-zinc-500">
+            Your tasks
+          </div>
+          <div className="mt-2 space-y-1.5">
+            {mine.map((t) => (
+              <Link
+                key={t.id}
+                href={`/results/${t.id}`}
+                className="flex items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-sm hover:bg-zinc-800/60"
+              >
+                <span className="min-w-0 flex-1 truncate text-zinc-300">
+                  {t.spec.title}
+                </span>
+                <span className="shrink-0 text-xs text-zinc-500">
+                  {t.answers} answered
+                </span>
+                <span className="shrink-0 text-xs text-emerald-500">
+                  results →
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-3 gap-2">
         {KINDS.map((k) => (
           <button
@@ -333,22 +392,26 @@ function PostTask() {
       </p>
 
       <Field label="What is this batch?">
-        <Input value={title} onChange={setTitle} />
+        <Input value={title} onChange={setTitle} placeholder={kindInfo.hints.title} />
       </Field>
 
       <Field
         label={kind === "survey" ? "Instruction to workers" : "What should workers decide?"}
       >
-        <Input value={question} onChange={setQuestion} />
+        <Input
+          value={question}
+          onChange={setQuestion}
+          placeholder={kindInfo.hints.question}
+        />
       </Field>
 
       {kind !== "survey" && (
         <div className="grid grid-cols-2 gap-3">
           <Field label="Answer A">
-            <Input value={labelNo} onChange={setLabelNo} />
+            <Input value={labelNo} onChange={setLabelNo} placeholder={kindInfo.hints.no} />
           </Field>
           <Field label="Answer B">
-            <Input value={labelYes} onChange={setLabelYes} />
+            <Input value={labelYes} onChange={setLabelYes} placeholder={kindInfo.hints.yes} />
           </Field>
         </div>
       )}
@@ -390,6 +453,7 @@ function PostTask() {
         <textarea
           value={raw}
           onChange={(e) => setRaw(e.target.value)}
+          placeholder={kindInfo.placeholder}
           rows={8}
           className="w-full resize-y rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 font-mono text-sm leading-relaxed outline-none focus:border-zinc-600"
         />
@@ -427,6 +491,13 @@ function PostTask() {
           value={`$${formatUnits(funding, DUSD_DECIMALS)}`}
           accent
         />
+        <p className="mt-2 text-xs leading-relaxed text-zinc-500">
+          <strong className="text-zinc-400">On testnet the escrow is minted
+          for you</strong>, so you can post without holding tokens. On mainnet
+          the identical call pulls real USDC from your balance via{" "}
+          <code className="text-zinc-400">transferFrom</code> — nothing else
+          about the contract changes.
+        </p>
         <p className="mt-2 text-xs leading-relaxed text-zinc-600">
           {kind === "text" &&
             "Everyone answers independently. Only those who agree with the majority are paid, so a worker guessing loses money rather than earning it. Whatever the crowd doesn't earn comes back to you."}

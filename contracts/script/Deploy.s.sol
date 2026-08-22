@@ -9,10 +9,11 @@ import {DemoUSD} from "../src/DemoUSD.sol";
 ///
 ///   forge script script/Deploy.s.sol --rpc-url monad_testnet --broadcast
 contract Deploy is Script {
-    /// 0.005 DUSD == half a cent, at 6 decimals.
-    uint96 constant REWARD_PER_LABEL = 5_000;
+    /// 3 cents an answer, at 6 decimals. Priced so a finished batch is worth
+    /// something a person would notice; half a cent reads as a toy.
+    uint96 constant REWARD_PER_LABEL = 30_000;
 
-    /// Enough for 20,000 answers. A room of sixty cannot drain this.
+    /// Enough that a room of sixty cannot drain it mid-demo.
     uint128 constant POOL = 100_000_000;
 
     uint32 constant ITEMS = 12;

@@ -133,8 +133,11 @@ contract TaskPool {
     mapping(uint256 taskId => mapping(uint256 itemId => mapping(bytes32 workerId => string)))
         public surveyAnswer;
 
-    /// @notice How many questions a worker has answered on a survey.
+    /// @notice How many items of a task a worker has answered.
     mapping(uint256 taskId => mapping(bytes32 workerId => uint32)) public answeredCount;
+
+    /// @notice Completion receipts already minted, so a task mints once.
+    mapping(uint256 taskId => mapping(bytes32 workerId => bool)) public receiptMinted;
 
     /// @notice Surveys already paid out, so completion pays exactly once.
     mapping(uint256 taskId => mapping(bytes32 workerId => bool)) public surveyPaid;
@@ -173,6 +176,7 @@ contract TaskPool {
     event SurveyAnswered(uint256 indexed taskId, bytes32 indexed workerId, uint256 itemId);
     event SurveyCompleted(uint256 indexed taskId, bytes32 indexed workerId, uint256 amount);
     event Paid(uint256 indexed taskId, bytes32 indexed workerId, uint256 amount);
+    event ReceiptMinted(uint256 indexed taskId, bytes32 indexed workerId, uint256 receiptId);
 
     error BadSignature();
     error TaskNotOpen();
@@ -431,6 +435,7 @@ contract TaskPool {
 
         hasLabeled[taskId][workerId][itemId] = true;
         tally[taskId][itemId][answer]++;
+        answeredCount[taskId][workerId]++;
         t.labelCount++;
         answersBy[workerId]++;
         unchecked {
@@ -442,6 +447,7 @@ contract TaskPool {
         if (t.mode == Mode.FirstCome) {
             // Objective work: the answer is either right or obvious, so pay now.
             _pay(taskId, workerId, t.rewardPerLabel);
+            _mintIfFinished(taskId, workerId);
             return;
         }
 
@@ -454,6 +460,29 @@ contract TaskPool {
         if (given + 1 >= t.quorum && !resolved[taskId][itemId]) {
             _resolve(taskId, itemId);
         }
+
+        _mintIfFinished(taskId, workerId);
+    }
+
+    /// @dev Mints the receipt the moment a worker finishes a task, rather than
+    ///      waiting for a cash-out. A stablecoin balance is invisible in a
+    ///      wallet until the token is imported, so without this a worker who
+    ///      just finished a batch has nothing at all to show for it.
+    ///
+    ///      Only address-derived identities can receive one: a passkey worker
+    ///      has no address until they name a cash-out destination, so theirs is
+    ///      minted at withdrawal instead.
+    function _mintIfFinished(uint256 taskId, bytes32 workerId) private {
+        if (receiptMinted[taskId][workerId]) return;
+        if (answeredCount[taskId][workerId] < itemCount[taskId]) return;
+        if (itemCount[taskId] == 0) return;
+
+        address to = address(uint160(uint256(workerId)));
+        if (bytes32(uint256(uint160(to))) != workerId) return; // passkey identity
+
+        receiptMinted[taskId][workerId] = true;
+        uint256 id = receipts.mint(to, earned[workerId], answersBy[workerId]);
+        emit ReceiptMinted(taskId, workerId, id);
     }
 
     /// @dev Settle a majority item: pay everyone who agreed with the crowd.
@@ -524,7 +553,14 @@ contract TaskPool {
         withdrawn[workerId] += amount;
         _push(to, amount);
 
-        receiptId = receipts.mint(to, amount, answersBy[workerId]);
+        // Address identities already collected a receipt when they finished a
+        // task; minting again on every cash-out would just spam their wallet.
+        address self = address(uint160(uint256(workerId)));
+        bool isAddressIdentity = bytes32(uint256(uint160(self))) == workerId;
+        if (!isAddressIdentity) {
+            receiptId = receipts.mint(to, amount, answersBy[workerId]);
+        }
+
         emit Withdrawn(workerId, to, amount, receiptId);
     }
 
@@ -667,6 +703,7 @@ contract TaskPool {
             uint256 amount = uint256(t.rewardPerLabel) * itemCount[taskId];
             _pay(taskId, workerId, amount);
             emit SurveyCompleted(taskId, workerId, amount);
+            _mintIfFinished(taskId, workerId);
         }
     }
 
