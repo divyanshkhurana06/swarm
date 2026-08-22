@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePrivy } from "@privy-io/react-auth";
 import { formatUnits } from "viem";
 import { chain, DUSD_DECIMALS } from "@/lib/contracts";
 import { walletBalances } from "@/lib/tasks";
@@ -37,6 +38,7 @@ export function WalletBar({
   address: string;
   email?: string;
 }) {
+  const { logout } = usePrivy();
   const [copied, setCopied] = useState(false);
   const [held, setHeld] = useState<{ dusd: bigint; nfts: number } | null>(null);
 
@@ -106,6 +108,7 @@ export function WalletBar({
         >
           View ↗
         </a>
+        <SignOut onClick={logout} compact />
       </div>
     </div>
   );
@@ -193,5 +196,32 @@ export function MoneyPop({ pops }: { pops: { id: number; label: string }[] }) {
         </span>
       ))}
     </div>
+  );
+}
+
+/**
+ * Signing out.
+ *
+ * Sits next to the wallet on every screen that shows one. Someone lending
+ * their phone to a colleague to try the app needs this to be findable in one
+ * look, not buried at the bottom of a scroll -- and the earnings stay on-chain
+ * either way, so signing back in with the same Google account restores them.
+ */
+export function SignOut({
+  onClick,
+  compact,
+}: {
+  onClick: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title="Sign out"
+      aria-label="Sign out"
+      className="rounded-lg border border-zinc-800 px-2 py-1 text-[11px] text-zinc-500 transition hover:border-zinc-700 hover:text-zinc-300"
+    >
+      {compact ? "⏻" : "Sign out"}
+    </button>
   );
 }

@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { usePrivy } from "@privy-io/react-auth";
 import { formatUnits } from "viem";
 import { DUSD_DECIMALS } from "@/lib/contracts";
 import { Mode, type Task } from "@/lib/tasks";
+import { SignOut } from "@/components/ui";
 
 /**
  * The worker's home.
@@ -42,12 +44,17 @@ export function IdentityCard({
   available: number;
   streak: number;
 }) {
+  const { logout } = usePrivy();
+
   return (
     <div className="rounded-3xl bg-gradient-to-br from-zinc-900 to-zinc-900/40 p-5 ring-1 ring-zinc-800">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500">
-            Annotator
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-zinc-500">
+              Annotator
+            </span>
+            <SignOut onClick={logout} />
           </div>
           <div className="truncate font-mono text-sm text-zinc-200">
             {address.slice(0, 6)}…{address.slice(-4)}

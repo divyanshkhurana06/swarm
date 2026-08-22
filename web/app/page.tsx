@@ -59,7 +59,7 @@ export default function Page() {
 }
 
 function Worker() {
-  const { ready, authenticated, login, logout, user } = usePrivy();
+  const { ready, authenticated, login, user } = usePrivy();
   const { wallets } = useWallets();
 
   const [tasks, setTasks] = useState<Task[] | null>(null);
@@ -582,12 +582,6 @@ function Worker() {
       )}
 
 
-      <button
-        onClick={logout}
-        className="text-center text-xs text-zinc-700 underline underline-offset-4"
-      >
-        Sign out
-      </button>
       <Footer />
     </Shell>
   );
