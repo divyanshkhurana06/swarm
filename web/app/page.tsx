@@ -40,6 +40,15 @@ const publicClient = createPublicClient({ chain, transport: http() });
 export default function Worker() {
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [manifest, setManifest] = useState<Manifest | null>(null);
+  /**
+   * Items this worker has not answered yet.
+   *
+   * The contract allows one answer per worker per item, so walking the
+   * manifest from index 0 on every page load meant a reload re-submitted an
+   * answered item and reverted with AlreadyLabeled. What has been answered
+   * lives on-chain, so ask the chain rather than trusting a counter in memory.
+   */
+  const [queue, setQueue] = useState<Item[] | null>(null);
   const [cursor, setCursor] = useState(0);
   const [reward, setReward] = useState<bigint>(0n);
   const [earned, setEarned] = useState<bigint>(0n);
@@ -96,6 +105,36 @@ export default function Worker() {
       .then((t) => setReward(BigInt(t.rewardPerLabel)))
       .catch(() => {});
   }, []);
+
+  // Build the work queue from what this worker has NOT already answered.
+  useEffect(() => {
+    if (!identity || !manifest) return;
+    let cancelled = false;
+
+    Promise.all(
+      manifest.items.map((item) =>
+        publicClient
+          .readContract({
+            address: TASK_POOL,
+            abi: taskPoolAbi,
+            functionName: "hasLabeled",
+            args: [TASK_ID, identity.workerId, BigInt(item.id)],
+          })
+          .then((done) => (done ? null : item))
+          // If the check itself fails, offer the item; a duplicate submission
+          // is rejected on-chain anyway and we handle that below.
+          .catch(() => item)
+      )
+    ).then((results) => {
+      if (cancelled) return;
+      setQueue(results.filter((i): i is Item => i !== null));
+      setCursor(0);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [identity, manifest]);
 
   // Reconcile the optimistic balance with what the contract actually says.
   useEffect(() => {
@@ -203,8 +242,8 @@ export default function Worker() {
 
   const answer = useCallback(
     async (value: number) => {
-      if (!identity || !manifest || busy) return;
-      const item = manifest.items[cursor];
+      if (!identity || !queue || busy) return;
+      const item = queue[cursor];
       if (!item) return;
 
       setError(null);
@@ -242,13 +281,19 @@ export default function Worker() {
         );
       } catch (e) {
         setEarned((v) => (v >= reward ? v - reward : 0n));
-        setError(e instanceof Error ? e.message : String(e));
+        const message = e instanceof Error ? e.message : String(e);
+        // One answer per worker per item. If this item was already answered
+        // (a stale queue, a double tap), just move on -- it is not an error
+        // the worker can do anything about.
+        if (!/AlreadyLabeled/i.test(message)) {
+          setError(message);
+        }
       } finally {
         pending.current -= 1;
         setBusy(false);
       }
     },
-    [identity, manifest, cursor, reward, busy]
+    [identity, queue, cursor, reward, busy]
   );
 
   const money = (v: bigint) => `$${formatUnits(v, DUSD_DECIMALS)}`;
@@ -317,7 +362,7 @@ export default function Worker() {
 
   // --- working ------------------------------------------------------------
 
-  const item = manifest?.items[cursor];
+  const item = queue?.[cursor];
 
   return (
     <Shell>
@@ -376,8 +421,12 @@ export default function Worker() {
           </div>
 
           <p className="text-center text-xs text-zinc-600">
-            {busy ? "Confirm with Face ID…" : `${manifest!.items.length - cursor} left`}
+            {busy ? "Confirm with Face ID…" : `${queue!.length - cursor} left`}
           </p>
+        </div>
+      ) : queue === null ? (
+        <div className="flex-1 flex items-center justify-center text-zinc-600">
+          Finding what you haven&apos;t answered yet…
         </div>
       ) : (
         <div className="flex-1 flex flex-col justify-center text-center gap-3">
