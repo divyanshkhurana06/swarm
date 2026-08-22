@@ -59,8 +59,13 @@ export async function POST(req: Request) {
   }
 
   const { action, sig } = body as { action?: string; sig?: SigPayload };
-  if (!action || !sig) {
-    return NextResponse.json({ error: "Missing action or sig" }, { status: 400 });
+  if (!action) {
+    return NextResponse.json({ error: "Missing action" }, { status: 400 });
+  }
+  // Registration is a single WebAuthn ceremony and carries no assertion;
+  // everything else must be signed.
+  if (action !== "register" && !sig) {
+    return NextResponse.json({ error: "Missing sig" }, { status: 400 });
   }
 
   try {
@@ -77,7 +82,7 @@ export async function POST(req: Request) {
           address: TASK_POOL,
           abi: taskPoolAbi,
           functionName: "registerWorker",
-          args: [{ x: BigInt(x), y: BigInt(y) }, credentialHash, toSig(sig)],
+          args: [{ x: BigInt(x), y: BigInt(y) }, credentialHash],
         });
         break;
       }
@@ -93,7 +98,7 @@ export async function POST(req: Request) {
           address: TASK_POOL,
           abi: taskPoolAbi,
           functionName: "submitLabel",
-          args: [BigInt(taskId), BigInt(itemId), Number(answer), workerId, toSig(sig)],
+          args: [BigInt(taskId), BigInt(itemId), Number(answer), workerId, toSig(sig!)],
         });
         break;
       }
@@ -104,7 +109,7 @@ export async function POST(req: Request) {
           address: TASK_POOL,
           abi: taskPoolAbi,
           functionName: "withdraw",
-          args: [workerId, to, toSig(sig)],
+          args: [workerId, to, toSig(sig!)],
         });
         break;
       }

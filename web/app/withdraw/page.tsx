@@ -2,7 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { createPublicClient, http, formatUnits, isAddress, type Hex } from "viem";
+import {
+  createPublicClient,
+  decodeEventLog,
+  formatUnits,
+  http,
+  isAddress,
+  type Hex,
+} from "viem";
 import {
   chain,
   TASK_POOL,
@@ -34,6 +41,9 @@ const publicClient = createPublicClient({ chain, transport: http() });
 export default function Withdraw() {
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [balance, setBalance] = useState<bigint>(0n);
+  const [nonce, setNonce] = useState<bigint>(0n);
+  const [minimum, setMinimum] = useState<bigint>(50_000n);
+  const [receiptId, setReceiptId] = useState<bigint | null>(null);
   const [to, setTo] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -46,16 +56,37 @@ export default function Withdraw() {
 
   useEffect(() => {
     if (!identity) return;
+    // The nonce is fetched here rather than inside the click handler on
+    // purpose: iOS consumes the user gesture across an await, so any network
+    // round trip before navigator.credentials.get() makes Face ID fail with
+    // NotAllowedError. Everything the signature needs must be ready before
+    // the user taps.
     const sync = () =>
-      publicClient
-        .readContract({
+      Promise.all([
+        publicClient.readContract({
           address: TASK_POOL,
           abi: taskPoolAbi,
           functionName: "balanceOf",
           args: [identity.workerId],
+        }),
+        publicClient.readContract({
+          address: TASK_POOL,
+          abi: taskPoolAbi,
+          functionName: "nonces",
+          args: [identity.workerId],
+        }),
+        publicClient.readContract({
+          address: TASK_POOL,
+          abi: taskPoolAbi,
+          functionName: "MIN_WITHDRAWAL",
+        }),
+      ])
+        .then(([bal, n, min]) => {
+          setBalance(bal);
+          setNonce(n);
+          setMinimum(min);
         })
-        .then(setBalance)
-        .catch((e) => console.error("balance read failed:", e));
+        .catch((e) => console.error("withdraw screen read failed:", e));
 
     sync();
     const t = setInterval(sync, 5000);
@@ -71,19 +102,20 @@ export default function Withdraw() {
       return;
     }
 
+    if (balance < minimum) {
+      setError(
+        `Minimum cash-out is $${formatUnits(minimum, DUSD_DECIMALS)}. ` +
+          `Answer a few more to get there.`
+      );
+      return;
+    }
+
     setError(null);
     setBusy(true);
     try {
-      // The nonce is part of the challenge, so a withdrawal signature cannot be
-      // replayed to drain the balance a second time. Read it fresh.
-      setStatus("Reading your account…");
-      const nonce = await publicClient.readContract({
-        address: TASK_POOL,
-        abi: taskPoolAbi,
-        functionName: "nonces",
-        args: [identity.workerId],
-      });
-
+      // Face ID first, with no await before it -- see the note on the nonce
+      // fetch above. The nonce is part of the challenge, so a withdrawal
+      // signature cannot be replayed to drain the balance twice.
       setStatus("Confirm with Face ID…");
       const sig = await sign(
         withdrawChallenge(destination as Hex, nonce),
@@ -105,7 +137,25 @@ export default function Withdraw() {
       if (!res.ok) throw new Error(json.error ?? "Withdrawal failed");
 
       setStatus("Confirming on Monad…");
-      await publicClient.waitForTransactionReceipt({ hash: json.hash });
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: json.hash,
+      });
+
+      // Pull the receipt NFT id out of the Withdrawn event so we can link to it.
+      for (const log of receipt.logs) {
+        try {
+          const parsed = decodeEventLog({
+            abi: taskPoolAbi,
+            data: log.data,
+            topics: log.topics,
+          });
+          if (parsed.eventName === "Withdrawn") {
+            setReceiptId((parsed.args as { receiptId: bigint }).receiptId);
+          }
+        } catch {
+          // Other contracts' logs are in here too; ignore what we can't parse.
+        }
+      }
 
       setDone({ hash: json.hash, amount: balance });
       setBalance(0n);
@@ -139,6 +189,13 @@ export default function Withdraw() {
             <br />
             <span className="font-mono text-sm text-zinc-300">{to}</span>
           </p>
+          {receiptId !== null && (
+            <p className="text-sm text-zinc-400">
+              Receipt NFT{" "}
+              <span className="font-mono text-zinc-200">#{receiptId.toString()}</span>{" "}
+              minted to the same address.
+            </p>
+          )}
           <a
             href={explorerTx(done.hash)}
             target="_blank"
@@ -179,19 +236,20 @@ export default function Withdraw() {
             <p className="text-xs leading-relaxed text-zinc-600">
               Any address works — a wallet, an exchange deposit address, a
               friend&apos;s. You never needed one to earn; you only need one to
-              cash out.
+              cash out. You&apos;ll also get a receipt NFT at the same address,
+              which shows up in a wallet without importing anything.
             </p>
           </div>
 
           <button
             onClick={withdraw}
-            disabled={busy || balance === 0n}
+            disabled={busy || balance < minimum}
             className="w-full rounded-2xl bg-emerald-500 py-5 text-lg font-semibold text-zinc-950 active:scale-[0.98] transition disabled:opacity-40"
           >
             {busy
               ? (status ?? "Working…")
-              : balance === 0n
-                ? "Nothing to withdraw yet"
+              : balance < minimum
+                ? `Minimum is ${money(minimum)}`
                 : `Withdraw ${money(balance)}`}
           </button>
 

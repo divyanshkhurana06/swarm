@@ -5,6 +5,7 @@ import {Test, console} from "forge-std/Test.sol";
 import {TaskPool, IERC20} from "../src/TaskPool.sol";
 import {DemoUSD} from "../src/DemoUSD.sol";
 import {WebAuthn} from "../src/WebAuthn.sol";
+import {WorkReceipt} from "../src/WorkReceipt.sol";
 
 /// @dev Run with the P256 precompile enabled:
 ///        forge test --odyssey
@@ -73,8 +74,8 @@ contract TaskPoolTest is Test {
     }
 
     function test_Withdraw_SweepsToChosenAddress() public {
-        _label(taskId, 0, 1);
-        _label(taskId, 1, 0);
+        // Clear MIN_WITHDRAWAL (0.05) at 0.005 per answer.
+        for (uint256 i = 0; i < 10; i++) _label(taskId, i, uint8(i % 2));
 
         address cashOut = address(0xCA5);
         uint256 owed = pool.balanceOf(workerId);
@@ -85,6 +86,55 @@ contract TaskPoolTest is Test {
         assertEq(usd.balanceOf(cashOut), owed, "funds landed at chosen address");
         assertEq(pool.balanceOf(workerId), 0);
         assertEq(pool.earned(workerId), owed, "lifetime earnings preserved");
+    }
+
+    function test_RevertWhen_WithdrawalBelowMinimum() public {
+        // One answer is 0.005; the minimum is 0.05.
+        _label(taskId, 0, 1);
+
+        address cashOut = address(0xCA5);
+        WebAuthn.Signature memory sig = _sign(pool.withdrawChallenge(workerId, cashOut));
+
+        vm.expectRevert(TaskPool.BelowMinimum.selector);
+        pool.withdraw(workerId, cashOut, sig);
+    }
+
+    function test_Withdraw_MintsReceiptNft() public {
+        for (uint256 i = 0; i < 10; i++) _label(taskId, i, uint8(i % 2));
+
+        address cashOut = address(0xCA5);
+        uint256 owed = pool.balanceOf(workerId);
+
+        WebAuthn.Signature memory sig = _sign(pool.withdrawChallenge(workerId, cashOut));
+        uint256 receiptId = pool.withdraw(workerId, cashOut, sig);
+
+        WorkReceipt receipts = pool.receipts();
+        assertEq(receipts.ownerOf(receiptId), cashOut, "receipt goes to the cash-out address");
+        assertEq(receipts.balanceOf(cashOut), 1);
+
+        (uint128 amount, uint64 answers,) = receipts.receiptOf(receiptId);
+        assertEq(amount, owed, "receipt records what was paid");
+        assertEq(answers, 10, "receipt records answers given");
+
+        // Metadata is generated on-chain, so it keeps rendering with no server.
+        string memory uri = receipts.tokenURI(receiptId);
+        assertGt(bytes(uri).length, 100);
+        assertEq(
+            keccak256(bytes(_slice(uri, 0, 29))),
+            keccak256("data:application/json;base64,"),
+            "tokenURI must be a self-contained data URI"
+        );
+    }
+
+    function _slice(string memory s, uint256 start, uint256 len)
+        private
+        pure
+        returns (string memory)
+    {
+        bytes memory b = bytes(s);
+        bytes memory out = new bytes(len);
+        for (uint256 i = 0; i < len; i++) out[i] = b[start + i];
+        return string(out);
     }
 
     // ---------------------------------------------------------------------
@@ -116,13 +166,13 @@ contract TaskPoolTest is Test {
     }
 
     function test_RevertWhen_WithdrawalIsReplayed() public {
-        _label(taskId, 0, 1);
+        for (uint256 i = 0; i < 10; i++) _label(taskId, i, uint8(i % 2));
 
         address cashOut = address(0xCA5);
         WebAuthn.Signature memory sig = _sign(pool.withdrawChallenge(workerId, cashOut));
         pool.withdraw(workerId, cashOut, sig);
 
-        _label(taskId, 1, 1);
+        for (uint256 i = 10; i < 20; i++) _label(taskId, i, uint8(i % 2));
 
         // The nonce moved, so the old assertion is dead.
         vm.expectRevert(TaskPool.BadSignature.selector);
@@ -225,8 +275,7 @@ contract TaskPoolTest is Test {
 
     function _register() internal returns (bytes32) {
         WebAuthn.PubKey memory pk = _pubkey();
-        WebAuthn.Signature memory sig = _sign(pool.registerChallenge(pk, CRED));
-        return pool.registerWorker(pk, CRED, sig);
+        return pool.registerWorker(pk, CRED);
     }
 
     function _label(uint256 task, uint256 itemId, uint8 answer) internal {

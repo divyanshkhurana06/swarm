@@ -8,8 +8,9 @@ Built at [Monad Blitz Hyderabad V3](https://blitz.devnads.com/events/monad-blitz
 
 - **Live demo:** _TODO — add the deployed URL_
 - **Projector dashboard:** _TODO — `<url>/dashboard`_
-- **TaskPool (Monad Testnet):** [`0x565695F2E3Ae6324dCa1788D2b0C05A701922775`](https://testnet.monadvision.com/address/0x565695F2E3Ae6324dCa1788D2b0C05A701922775) — verified
-- **DemoUSD (Monad Testnet):** [`0x22BAF33C96B191bc2D8c9cf116372f1B25042688`](https://testnet.monadvision.com/address/0x22BAF33C96B191bc2D8c9cf116372f1B25042688) — verified
+- **TaskPool (Monad Testnet):** [`0x016c11ef8e95D4FB01d7dA779EDb1e3A47CC718C`](https://testnet.monadvision.com/address/0x016c11ef8e95D4FB01d7dA779EDb1e3A47CC718C) — verified
+- **DemoUSD (Monad Testnet):** [`0x40E66E2Dc9eF2A05Ed7025e4BA6e6f3412DA7d47`](https://testnet.monadvision.com/address/0x40E66E2Dc9eF2A05Ed7025e4BA6e6f3412DA7d47) — verified
+- **WorkReceipt NFT (Monad Testnet):** [`0x4AeB50C5426AB43Df64ac584fB70572aDDf32452`](https://testnet.monadvision.com/address/0x4AeB50C5426AB43Df64ac584fB70572aDDf32452) — verified
 - **Task id:** `0` · **Reward:** 0.005 DUSD (half a cent) per answer
 
 ---
@@ -41,7 +42,8 @@ A full passkey-authorised, paid-out answer costs **205,659 gas** on Monad testne
 - **Recovery.** Registration also records `keccak256(credentialId) => workerId` on-chain. A WebAuthn assertion returns the credential id but never the public key, so without that mapping a worker who cleared their browser — or opened the site on a second device — would be unable to derive their own identity and would be silently orphaned from money they had already earned. With it, signing in with the passkey recovers the account from the chain. Browser storage is a cache, not the source of truth.
 - **Every answer.** The intent (`taskId`, `itemId`, `answer`) is hashed into the WebAuthn challenge. The contract recomputes that challenge and rejects anything else — so a signature for "yes" is not a signature for "no", and a captured signature cannot be replayed against another action, contract, or chain.
 - **Gas.** Workers hold no MON, so a relayer submits their signed payloads and pays. This is safe because the *contract* verifies the worker's signature: the relayer cannot forge an answer, redirect a payout, or touch a balance. The worst it can do is refuse to deliver.
-- **Payouts.** Earnings accrue to an internal ledger keyed by public key, then settle in a single `withdraw` to any address the worker names. Transferring on every answer would mean paying ERC-20 gas hundreds of times to move a couple of dollars.
+- **Payouts.** Earnings accrue to an internal ledger keyed by public key, then settle in a single `withdraw` to any address the worker names. Transferring on every answer would mean paying ERC-20 gas hundreds of times to move a couple of dollars. Cash-out has a floor of 0.05 DUSD, because sweeping a few cents costs more gas than it moves.
+- **Receipts.** Cashing out mints a `WorkReceipt` NFT to the same address, recording the amount and the number of answers behind it. A stablecoin payout is invisible in a wallet until the token is manually imported, which makes a real payment feel like nothing happened; the NFT shows up on its own. Its artwork is generated on-chain as an SVG data URI, so nothing has to stay hosted for it to keep rendering.
 
 ## Repository layout
 
@@ -50,13 +52,16 @@ contracts/
   src/WebAuthn.sol      passkey verification via the 0x0100 precompile
   src/TaskPool.sol      task pools, the worker ledger, payouts
   src/DemoUSD.sol       6-decimal stand-in stablecoin for testnet
-  test/TaskPool.t.sol   13 tests against real P256 signatures
+  src/WorkReceipt.sol   cash-out receipt NFT, artwork generated on-chain
+  src/Base64.sol        encoder for the NFT's inline metadata
+  test/TaskPool.t.sol   15 tests against real P256 signatures
   script/webauthn.js    generates real WebAuthn assertions for those tests
   script/Deploy.s.sol   deploys and seeds a funded task
 web/
   lib/passkey.ts        WebAuthn client: DER parsing, low-s, challenge encoding
   lib/contracts.ts      chain config and ABI
   app/page.tsx          the worker app
+  app/withdraw/page.tsx  cash out to any address
   app/dashboard/page.tsx the projector wall
   app/api/relay/route.ts the gas relayer
 ```
@@ -113,7 +118,7 @@ Open `http://localhost:3000` on a phone with Face ID or a fingerprint reader, an
 ### 3. Tests
 
 ```bash
-cd contracts && forge test --odyssey -vv    # 13 contract tests, local
+cd contracts && forge test --odyssey -vv    # 15 contract tests, local
 cd web && npm test                          # DER parser + challenge encoding
 cd web && npx tsx scripts/e2e-onchain.ts    # full flow against deployed contracts
 ```
@@ -146,6 +151,7 @@ Things a demo should not pretend to have solved:
 
 - **No fiat off-ramp.** Workers earn a stablecoin. Turning that into rupees still means an exchange and KYC. That is a partner integration, and it is the single biggest thing between this and a real product.
 - **No proof of personhood.** Passkeys are free and unlimited, so one person can hold many worker identities. Consensus-based quality control (an answer pays only when N workers independently agree) is designed but not implemented — right now every submitted answer pays.
+- **Registration is unauthenticated.** iOS consumes the user gesture on a WebAuthn ceremony, so calling `credentials.create()` and then `credentials.get()` to prove possession fails with `NotAllowedError` on real phones. Registration is therefore a single ceremony and the public key is taken as given. No funds are at risk — every later action still needs a signature from the matching private key — but somebody could register a victim's public key against their own credential hash and disrupt that victim's recovery lookup. The fix is a two-step flow with a second, separately-gestured tap.
 - **One relayer key.** Nonces are serialised in-process, which is enough for a room. Past a few hundred transactions per minute this needs a pool of keys.
 - **`DemoUSD` has an open mint.** It is a testnet stand-in. On mainnet it is replaced by real USDC and nothing else about `TaskPool` changes.
 

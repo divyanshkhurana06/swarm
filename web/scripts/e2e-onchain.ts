@@ -28,7 +28,6 @@ import { privateKeyToAccount } from "viem/accounts";
 import { chain, TASK_POOL, TASK_ID, taskPoolAbi } from "../lib/contracts";
 import {
   labelChallenge as localLabelChallenge,
-  registerChallenge as localRegisterChallenge,
   withdrawChallenge as localWithdrawChallenge,
   workerIdOf as localWorkerId,
 } from "../lib/passkey";
@@ -110,13 +109,6 @@ async function main() {
       throw new Error(`workerId mismatch: ${localWorkerId(pk)} vs ${onChainId}`);
     }
 
-    const onChainReg = (await read("registerChallenge", [pk, CRED])) as Hex;
-    if (localRegisterChallenge(pk, CRED) !== onChainReg) {
-      throw new Error(
-        `registerChallenge mismatch: ${localRegisterChallenge(pk, CRED)} vs ${onChainReg}`
-      );
-    }
-
     const onChainLabel = (await read("labelChallenge", [TASK_ID, 7n, 1])) as Hex;
     if (localLabelChallenge(TASK_ID, 7n, 1) !== onChainLabel) {
       throw new Error(
@@ -133,19 +125,14 @@ async function main() {
       throw new Error("withdrawChallenge mismatch");
     }
 
-    console.log("challenge encoding matches Solidity (register/label/withdraw)");
+    console.log("challenge encoding matches Solidity (label/withdraw)");
   }
 
   // 1. Register the passkey (proves possession of the private key).
   if (await read("isRegistered", [workerId])) {
     console.log("register skipped — already registered");
   } else {
-    const challenge = (await read("registerChallenge", [pk, CRED])) as Hex;
-    const { hash, gasUsed } = await send("registerWorker", [
-      pk,
-      CRED,
-      assertion(challenge),
-    ]);
+    const { hash, gasUsed } = await send("registerWorker", [pk, CRED]);
     console.log(`register ok    gas ${gasUsed}  ${hash}`);
   }
 
@@ -223,6 +210,19 @@ async function main() {
   // 4. Cash out. Earnings live in the contract's ledger keyed by public key,
   //    not "in" the passkey -- this proves a passkey signature can move them
   //    to an arbitrary address the worker names at withdrawal time.
+  //
+  //    Answer until the balance clears MIN_WITHDRAWAL; sweeping a few cents
+  //    costs more gas than it moves, so the contract refuses below the floor.
+  const minimum = (await read("MIN_WITHDRAWAL")) as bigint;
+  let nextFree = itemId + 1n;
+  while (((await read("balanceOf", [workerId])) as bigint) < minimum) {
+    while (await read("hasLabeled", [TASK_ID, workerId, nextFree])) nextFree++;
+    const c = (await read("labelChallenge", [TASK_ID, nextFree, 1])) as Hex;
+    await send("submitLabel", [TASK_ID, nextFree, 1, workerId, assertion(c)]);
+    nextFree++;
+  }
+  console.log(`topped up past the ${formatUnits(minimum, 6)} minimum`);
+
   const claimable = (await read("balanceOf", [workerId])) as bigint;
   if (claimable > 0n) {
     const dest = "0x000000000000000000000000000000000000dEaD" as const;
@@ -242,6 +242,31 @@ async function main() {
       `withdraw ok    gas ${wGas}  ${formatUnits(claimable, 6)} DUSD -> ${dest}  ${wHash}`
     );
     if (usd) console.log(`               (token ${usd})`);
+
+    // A stablecoin payout is invisible until the token is imported, so a
+    // receipt NFT lands at the same address. Its artwork is generated
+    // on-chain, so nothing has to stay hosted for it to keep rendering.
+    const receiptsAddr = (await read("receipts")) as Hex;
+    const nftAbi = [
+      { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
+      { name: "tokenURI", type: "function", stateMutability: "view", inputs: [{ type: "uint256" }], outputs: [{ type: "string" }] },
+      { name: "totalSupply", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
+    ] as const;
+
+    const held = await publicClient.readContract({ address: receiptsAddr, abi: nftAbi, functionName: "balanceOf", args: [dest] });
+    const supply = await publicClient.readContract({ address: receiptsAddr, abi: nftAbi, functionName: "totalSupply" });
+    const uri = await publicClient.readContract({ address: receiptsAddr, abi: nftAbi, functionName: "tokenURI", args: [supply] });
+
+    if (held === 0n) throw new Error("no receipt NFT was minted");
+    if (!uri.startsWith("data:application/json;base64,")) {
+      throw new Error(`tokenURI is not self-contained: ${uri.slice(0, 40)}`);
+    }
+    const meta = JSON.parse(atob(uri.slice("data:application/json;base64,".length)));
+    if (!String(meta.image).startsWith("data:image/svg+xml;base64,")) {
+      throw new Error("receipt artwork is not on-chain");
+    }
+    console.log(`receipt NFT    #${supply} -> ${dest}, "${meta.name}", art rendered on-chain`);
+    console.log(`               contract ${receiptsAddr}`);
   }
 
   const [labels, paid, workers] = await Promise.all([

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {WebAuthn} from "./WebAuthn.sol";
+import {WorkReceipt} from "./WorkReceipt.sol";
 
 interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
@@ -87,7 +88,9 @@ contract TaskPool {
         uint256 reward,
         uint256 totalLabels
     );
-    event Withdrawn(bytes32 indexed workerId, address indexed to, uint256 amount);
+    event Withdrawn(
+        bytes32 indexed workerId, address indexed to, uint256 amount, uint256 receiptId
+    );
 
     error BadSignature();
     error TaskNotOpen();
@@ -98,9 +101,22 @@ contract TaskPool {
     error NotRequester();
     error ZeroReward();
     error TransferFailed();
+    error BelowMinimum();
+
+    /// @notice Smallest cash-out, in the payout token's decimals (0.05 DUSD).
+    /// @dev Sweeping a few cents costs more in gas than it moves, and a
+    ///      dust-sized receipt NFT is not worth minting.
+    uint256 public constant MIN_WITHDRAWAL = 50_000;
+
+    /// @notice Receipts minted on cash-out.
+    WorkReceipt public immutable receipts;
+
+    /// @notice Lifetime answers per worker, stamped into the receipt.
+    mapping(bytes32 workerId => uint64) public answersBy;
 
     constructor(IERC20 _token) {
         token = _token;
+        receipts = new WorkReceipt(address(this));
     }
 
     // ---------------------------------------------------------------------
@@ -160,27 +176,41 @@ contract TaskPool {
     // ---------------------------------------------------------------------
 
     /// @notice Register a passkey as a worker identity.
-    /// @dev The assertion proves possession of the matching private key, so
-    ///      nobody can register a public key they do not control. The
-    ///      credential hash is bound into the challenge, so it cannot be
-    ///      swapped to hijack somebody else's sign-in lookup.
-    function registerWorker(
-        WebAuthn.PubKey calldata pk,
-        bytes32 credentialHash,
-        WebAuthn.Signature calldata sig
-    ) external returns (bytes32 workerId) {
+    ///
+    /// @dev Registration deliberately does NOT require a signature.
+    ///
+    ///      iOS consumes the user gesture on a WebAuthn ceremony, so calling
+    ///      `credentials.create()` and then `credentials.get()` to prove
+    ///      possession fails with NotAllowedError on real phones. Registration
+    ///      is therefore a single ceremony, and the public key is taken as
+    ///      given.
+    ///
+    ///      This is safe for funds: registering a public key you do not
+    ///      control grants nothing, because every subsequent action still
+    ///      requires a signature from the matching private key. The residual
+    ///      risk is griefing -- somebody could register a victim's public key
+    ///      against their own credential hash, pointing that victim's sign-in
+    ///      lookup at the wrong place. The victim keeps full control of their
+    ///      funds and can still work and withdraw; only recovery-by-credential
+    ///      is disrupted. Worth revisiting with a two-step flow that asks for
+    ///      a second, separately-gestured tap.
+    function registerWorker(WebAuthn.PubKey calldata pk, bytes32 credentialHash)
+        external
+        returns (bytes32 workerId)
+    {
         workerId = idOf(pk);
         if (!isRegistered[workerId]) {
-            if (!WebAuthn.verify(registerChallenge(pk, credentialHash), sig, pk)) {
-                revert BadSignature();
-            }
             _pubkeys[workerId] = pk;
             isRegistered[workerId] = true;
-            workerOf[credentialHash] = workerId;
             unchecked {
                 workerCount++;
             }
             emit WorkerRegistered(workerId, pk.x, pk.y);
+        }
+        // Always (re)point the credential lookup, so the same person signing in
+        // from a second device resolves to the identity they already own.
+        if (workerOf[credentialHash] == bytes32(0)) {
+            workerOf[credentialHash] = workerId;
         }
     }
 
@@ -209,6 +239,7 @@ contract TaskPool {
         t.paidOut += uint128(reward);
         t.labelCount++;
         earned[workerId] += reward;
+        answersBy[workerId]++;
 
         unchecked {
             totalLabels++;
@@ -221,11 +252,20 @@ contract TaskPool {
     /// @notice Sweep everything earned to any address the worker names.
     /// @dev The passkey is the authority; the destination is chosen at cash-out
     ///      time, which is why a worker never needed a wallet to start earning.
-    function withdraw(bytes32 workerId, address to, WebAuthn.Signature calldata sig) external {
+    ///
+    ///      A receipt NFT is minted to the same address. A stablecoin payout is
+    ///      invisible in a wallet until the token is manually imported, which
+    ///      makes a real payment feel like nothing happened; the NFT shows up
+    ///      on its own.
+    function withdraw(bytes32 workerId, address to, WebAuthn.Signature calldata sig)
+        external
+        returns (uint256 receiptId)
+    {
         if (!isRegistered[workerId]) revert NotRegistered();
 
         uint256 amount = earned[workerId] - withdrawn[workerId];
         if (amount == 0) revert NothingToWithdraw();
+        if (amount < MIN_WITHDRAWAL) revert BelowMinimum();
 
         if (!WebAuthn.verify(withdrawChallenge(workerId, to), sig, _pubkeys[workerId])) {
             revert BadSignature();
@@ -236,7 +276,9 @@ contract TaskPool {
         }
         withdrawn[workerId] += amount;
         _push(to, amount);
-        emit Withdrawn(workerId, to, amount);
+
+        receiptId = receipts.mint(to, amount, answersBy[workerId]);
+        emit Withdrawn(workerId, to, amount, receiptId);
     }
 
     // ---------------------------------------------------------------------

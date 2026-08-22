@@ -18,7 +18,6 @@ import {
   isSupported,
   labelChallenge,
   loadIdentity,
-  registerChallenge,
   saveIdentity,
   serializeSignature,
   sign,
@@ -128,12 +127,6 @@ export default function Worker() {
       const id = await createIdentity();
       const credentialHash = credentialHashOf(id.credentialId);
 
-      setStatus("Proving you own it…");
-      const sig = await sign(
-        registerChallenge(id.pubkey!, credentialHash),
-        id.credentialId
-      );
-
       setStatus("Registering on Monad…");
       const res = await fetch("/api/relay", {
         method: "POST",
@@ -143,7 +136,6 @@ export default function Worker() {
           x: id.pubkey!.x.toString(),
           y: id.pubkey!.y.toString(),
           credentialHash,
-          sig: serializeSignature(sig),
         }),
       });
       const json = await res.json();

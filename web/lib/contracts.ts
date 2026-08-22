@@ -38,9 +38,9 @@ export const taskPoolAbi = parseAbi([
   "struct PubKey { uint256 x; uint256 y; }",
   "struct Task { address requester; uint96 rewardPerLabel; uint128 funded; uint128 paidOut; uint64 labelCount; bool open; }",
 
-  "function registerWorker(PubKey pk, bytes32 credentialHash, WebAuthnSignature sig) returns (bytes32)",
+  "function registerWorker(PubKey pk, bytes32 credentialHash) returns (bytes32)",
   "function submitLabel(uint256 taskId, uint256 itemId, uint8 answer, bytes32 workerId, WebAuthnSignature sig)",
-  "function withdraw(bytes32 workerId, address to, WebAuthnSignature sig)",
+  "function withdraw(bytes32 workerId, address to, WebAuthnSignature sig) returns (uint256)",
 
   "function isRegistered(bytes32) view returns (bool)",
   "function earned(bytes32) view returns (uint256)",
@@ -54,17 +54,19 @@ export const taskPoolAbi = parseAbi([
   "function remaining(uint256) view returns (uint256)",
   "function idOf(PubKey pk) pure returns (bytes32)",
   "function token() view returns (address)",
+  "function receipts() view returns (address)",
+  "function MIN_WITHDRAWAL() view returns (uint256)",
+  "function answersBy(bytes32) view returns (uint64)",
 
   // The client computes these locally to avoid a round trip per swipe; they
   // are exposed so the encoding can be diffed against Solidity in tests.
-  "function registerChallenge(PubKey pk, bytes32 credentialHash) view returns (bytes32)",
   "function workerOf(bytes32 credentialHash) view returns (bytes32)",
   "function labelChallenge(uint256 taskId, uint256 itemId, uint8 answer) view returns (bytes32)",
   "function withdrawChallenge(bytes32 workerId, address to) view returns (bytes32)",
 
   "event LabelSubmitted(uint256 indexed taskId, bytes32 indexed workerId, uint256 itemId, uint8 answer, uint256 reward, uint256 totalLabels)",
   "event WorkerRegistered(bytes32 indexed workerId, uint256 x, uint256 y)",
-  "event Withdrawn(bytes32 indexed workerId, address indexed to, uint256 amount)",
+  "event Withdrawn(bytes32 indexed workerId, address indexed to, uint256 amount, uint256 receiptId)",
 ]);
 
 export const explorerTx = (hash: string) =>

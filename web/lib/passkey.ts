@@ -42,25 +42,8 @@ const STORAGE_KEY = "swarm.identity";
 
 // --- action tags, mirroring TaskPool's bytes32 constants -------------------
 
-const ACTION_REGISTER = keccak256(toBytes("swarm.register"));
 const ACTION_LABEL = keccak256(toBytes("swarm.label"));
 const ACTION_WITHDRAW = keccak256(toBytes("swarm.withdraw"));
-
-export function registerChallenge(pk: PubKey, credentialHash: Hex): Hex {
-  return keccak256(
-    encodeAbiParameters(
-      [
-        { type: "uint256" },
-        { type: "address" },
-        { type: "bytes32" },
-        { type: "uint256" },
-        { type: "uint256" },
-        { type: "bytes32" },
-      ],
-      [BigInt(chain.id), TASK_POOL, ACTION_REGISTER, pk.x, pk.y, credentialHash]
-    )
-  );
-}
 
 /** Stable on-chain handle for a passkey, derived from its credential id. */
 export function credentialHashOf(credentialId: string): Hex {
