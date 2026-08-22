@@ -52,6 +52,16 @@ text, and it is split into questions they can edit before posting — a heuristi
 will sometimes be wrong, and silently posting a mangled survey wastes both the
 requester's money and the workers' time.
 
+Extracting that text needs care. pdf.js returns positioned fragments rather
+than lines, so joining them with spaces — the obvious approach — destroys every
+line break and leaves the splitter a single wall of text with nothing to split
+on. Fragments are regrouped into lines using the end-of-line flag where the
+document sets it and the baseline y-coordinate where it does not. The splitter
+then handles numbered (`1.`, `Q1)`), bulleted, and unnumbered layouts, and joins
+lines that continue a wrapped question — `scripts/survey.test.ts` covers each of
+those shapes, because a question split across two lines becoming two questions
+means paying workers to answer sentence fragments.
+
 A majority-vote mode also exists in the contract and is tested, but is not
 offered in the product.
 
@@ -173,7 +183,7 @@ Open `http://localhost:3000` on a phone with Face ID or a fingerprint reader, an
 
 ```bash
 cd contracts && forge test --odyssey -vv    # 51 contract tests, local
-cd web && npm test                          # DER parser + challenge encoding
+cd web && npm test                          # DER parser, challenge encoding, survey splitting
 cd web && npx tsx scripts/e2e-onchain.ts    # passkey flow against deployed contracts
 cd web && npx tsx scripts/e2e-modes.ts      # all three task modes, live chain
 ```

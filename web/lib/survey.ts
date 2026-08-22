@@ -10,9 +10,16 @@
 
 export type Question = { id: number; text: string };
 
-/** Extracts text from a PDF entirely in the browser. */
+/**
+ * Extracts text from a PDF, preserving line structure.
+ *
+ * pdf.js returns positioned fragments, not lines. Joining them all with
+ * spaces -- which is the obvious thing to do -- destroys every line break and
+ * leaves the splitter with a single wall of text and nothing to split on.
+ * Fragments are grouped back into lines using the end-of-line flag where the
+ * document provides it, and their baseline y-coordinate where it does not.
+ */
 export async function extractPdfText(file: File): Promise<string> {
-  // Loaded on demand: pdf.js is large and most requesters paste text instead.
   const pdfjs = await import("pdfjs-dist");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL(
     "pdfjs-dist/build/pdf.worker.mjs",
@@ -20,49 +27,106 @@ export async function extractPdfText(file: File): Promise<string> {
   ).toString();
 
   const doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
-  const pages: string[] = [];
+  const lines: string[] = [];
 
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i);
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p);
     const content = await page.getTextContent();
-    // Items carry their own spacing; join on spaces and tidy up after.
-    pages.push(
-      content.items
-        .map((it) => ("str" in it ? it.str : ""))
-        .join(" ")
-        .replace(/\s+/g, " ")
-    );
+
+    let current = "";
+    let lastY: number | null = null;
+
+    for (const item of content.items) {
+      if (!("str" in item)) continue;
+
+      // transform[5] is the baseline y. A jump means a new line even when the
+      // document never sets hasEOL.
+      const y = item.transform?.[5] as number | undefined;
+      const movedLine =
+        lastY !== null && y !== undefined && Math.abs(y - lastY) > 2;
+
+      if (movedLine && current.trim()) {
+        lines.push(current.trim());
+        current = "";
+      }
+
+      current += item.str;
+      if (y !== undefined) lastY = y;
+
+      if (item.hasEOL) {
+        if (current.trim()) lines.push(current.trim());
+        current = "";
+      }
+    }
+
+    if (current.trim()) lines.push(current.trim());
   }
 
-  return pages.join("\n");
+  return lines.join("\n");
 }
+
+/** Question numbering a real document actually uses. */
+const NUMBERED = /^\s*(?:Q\s*)?(\d{1,2})\s*[.)\]:-]\s+/i;
+const BULLET = /^\s*[-*•●▪]\s+/;
 
 /**
  * Splits a document into questions.
  *
- * Tries the structures real surveys actually use, in order of how confident
- * we can be about them: explicit question marks, then numbered or bulleted
- * lines, then plain lines. Anything too short to be a question is dropped.
+ * Works line by line and joins continuations, because a question that wraps
+ * across two lines in the PDF is still one question -- treating each visual
+ * line as an item is how you end up paying workers to answer sentence
+ * fragments.
  */
 export function splitIntoQuestions(text: string): Question[] {
-  const cleaned = text.replace(/\r/g, "").trim();
-  if (!cleaned) return [];
+  const lines = text
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
 
-  let parts: string[];
+  if (lines.length === 0) return [];
 
-  const questionMarks = cleaned.match(/[^?\n]+\?/g);
-  if (questionMarks && questionMarks.length >= 2) {
-    parts = questionMarks;
+  const numbered = lines.filter((l) => NUMBERED.test(l)).length;
+  const bulleted = lines.filter((l) => BULLET.test(l)).length;
+
+  const chunks: string[] = [];
+  let buffer = "";
+
+  const flush = () => {
+    if (buffer.trim()) chunks.push(buffer.trim());
+    buffer = "";
+  };
+
+  if (numbered >= 2 || bulleted >= 2) {
+    // The document numbers its questions, so a marker starts a new one and
+    // everything until the next marker belongs to it.
+    for (const line of lines) {
+      const isMarker = NUMBERED.test(line) || BULLET.test(line);
+      if (isMarker) {
+        flush();
+        buffer = line.replace(NUMBERED, "").replace(BULLET, "");
+      } else if (buffer) {
+        buffer += " " + line;
+      } else {
+        // Preamble before the first question -- a title, a heading. Skip it.
+      }
+    }
+    flush();
+  } else if (text.includes("?")) {
+    // No numbering, but question marks tell us where each one ends.
+    for (const line of lines) {
+      buffer = buffer ? `${buffer} ${line}` : line;
+      if (line.includes("?")) flush();
+    }
+    flush();
   } else {
-    parts = cleaned
-      .split("\n")
-      // Strip "1.", "1)", "Q1.", "-", "•" prefixes.
-      .map((l) => l.replace(/^\s*(?:Q?\d+[.)]|[-*•])\s*/i, "").trim());
+    // Nothing to go on: one question per line is the least surprising guess.
+    for (const line of lines) chunks.push(line);
   }
 
-  return parts
+  return chunks
     .map((t) => t.replace(/\s+/g, " ").trim())
-    // Headings and stray fragments are not questions.
+    // Headings, page numbers and stray fragments are not questions.
     .filter((t) => t.length >= 8 && t.split(" ").length >= 3)
     .map((text, id) => ({ id, text }));
 }
@@ -71,7 +135,7 @@ export function splitIntoQuestions(text: string): Question[] {
 export function looksLikeQuestion(text: string): boolean {
   return (
     text.trim().endsWith("?") ||
-    /^(how|what|why|when|where|which|who|do|does|did|is|are|would|could|should|rate|describe|explain|tell)\b/i.test(
+    /^(how|what|why|when|where|which|who|do|does|did|is|are|would|could|should|rate|describe|explain|tell|have|has|can|will|on a scale)\b/i.test(
       text.trim()
     )
   );

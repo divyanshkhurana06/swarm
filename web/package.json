@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "tsx lib/passkey.test.ts"
+    "test": "tsx lib/passkey.test.ts && tsx scripts/survey.test.ts"
   },
   "dependencies": {
     "@privy-io/react-auth": "^3.37.4",

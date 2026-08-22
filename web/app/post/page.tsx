@@ -435,8 +435,9 @@ function PostTask() {
               {extracting ? "Shrinking…" : "Upload JPG / PNG / PDF"}
             </button>
             <span className="text-xs text-zinc-600">
-              A PDF becomes one image per page. Stored on-chain, so all of
-              them are downscaled hard.
+              A PDF becomes one image per page — for separate photos, select
+              them all at once. Stored on-chain, so everything is downscaled
+              hard.
             </span>
           </div>
           {uploaded.length > 0 && (
@@ -486,7 +487,8 @@ function PostTask() {
             {extracting ? "Reading…" : "Upload PDF or text"}
           </button>
           <span className="text-xs text-zinc-600">
-            We&apos;ll pull out the questions — check them before posting.
+            Numbered, bulleted or plain — we&apos;ll split it into questions.
+            Check them before posting.
           </span>
           <input
             ref={fileRef}
