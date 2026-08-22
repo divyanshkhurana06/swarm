@@ -67,6 +67,23 @@ async function main() {
   }, IMAGE_RATE, 4, 0, 1);
 
   await post({
+    title: "Support ticket triage",
+    question: "Is this ticket urgent?",
+    kind: "text",
+    answers: { "0": "Not urgent", "1": "Urgent" },
+    items: [
+      { id: 0, text: "The site is down for all our users right now." },
+      { id: 1, text: "How do I change my avatar?" },
+      { id: 2, text: "Billing charged me twice this month." },
+      { id: 3, text: "Love the new dark mode, thanks!" },
+      { id: 4, text: "I can't log in and my demo is in ten minutes." },
+      { id: 5, text: "Is there a keyboard shortcut for search?" },
+      { id: 6, text: "Production data looks corrupted after the migration." },
+      { id: 7, text: "Could you add a dark theme to the mobile app?" },
+    ],
+  }, TEXT_RATE, 8, 0, 1);
+
+  await post({
     title: "Customer research",
     question: "Answer in your own words — a sentence is fine",
     kind: "survey",

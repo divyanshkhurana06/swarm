@@ -27,7 +27,7 @@ import { Shell, Field, Input, WalletBar } from "@/components/ui";
  *   Survey   long-form answers, paid only when the whole response is finished
  */
 
-type Kind = "bbox" | "survey";
+type Kind = "bbox" | "text" | "survey";
 
 const KINDS: {
   key: Kind;
@@ -54,6 +54,22 @@ const KINDS: {
     hints: {
       title: "Dashcam frames",
       question: "Draw a box around any car",
+    },
+  },
+  {
+    key: "text",
+    mode: 0,
+    title: "Text labelling",
+    blurb:
+      "Yes or no about a line of text. First to answer takes it — same as an image bounty, different screen.",
+    placeholder:
+      "The site is down for all our users right now.\nHow do I change my avatar?\nBilling charged me twice this month.",
+    defaultQuorum: 1,
+    // A read-and-tap is quicker than boxing a photo, so it is priced under it.
+    defaultCents: "3",
+    hints: {
+      title: "Support ticket triage",
+      question: "Is this ticket urgent?",
     },
   },
   {
@@ -102,6 +118,8 @@ function PostTask() {
   const [title, setTitle] = useState("");
   const [question, setQuestion] = useState("");
   const [raw, setRaw] = useState("");
+  const [labelNo, setLabelNo] = useState("");
+  const [labelYes, setLabelYes] = useState("");
   const [rewardCents, setRewardCents] = useState("5");
   const [quorum, setQuorum] = useState(1);
 
@@ -129,7 +147,9 @@ function PostTask() {
   }, [address, done]);
 
   const items = useMemo(() => {
-    if (kind === "survey") return splitIntoQuestions(raw);
+    // Text items and survey questions are both "one line, one job", so the
+    // same splitter handles a pasted list or an extracted PDF for either.
+    if (kind === "survey" || kind === "text") return splitIntoQuestions(raw);
 
     // Uploaded photos first, then any pasted URLs.
     const urls = raw
@@ -251,6 +271,10 @@ function PostTask() {
       setError("Give the batch a name and tell workers what to decide");
       return;
     }
+    if (kind === "text" && (!labelNo.trim() || !labelYes.trim())) {
+      setError("Name both answers so workers know what they're choosing");
+      return;
+    }
 
     setError(null);
     setBusy(true);
@@ -259,7 +283,10 @@ function PostTask() {
         title,
         question,
         kind,
-        answers: { "0": "Nothing here", "1": "Found it" },
+        answers:
+          kind === "text"
+            ? { "0": labelNo, "1": labelYes }
+            : { "0": "Nothing here", "1": "Found it" },
         items,
       });
 
@@ -313,6 +340,8 @@ function PostTask() {
     kind,
     kindInfo,
     quorum,
+    labelNo,
+    labelYes,
   ]);
 
   if (!ready) {
@@ -437,7 +466,11 @@ function PostTask() {
       </Field>
 
       <Field
-        label={kind === "survey" ? "Instruction to workers" : "What should workers decide?"}
+        label={
+          kind === "survey"
+            ? "Instruction to workers"
+            : "What should workers decide?"
+        }
       >
         <Input
           value={question}
@@ -446,6 +479,17 @@ function PostTask() {
         />
       </Field>
 
+
+      {kind === "text" && (
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Answer A">
+            <Input value={labelNo} onChange={setLabelNo} placeholder="Not urgent" />
+          </Field>
+          <Field label="Answer B">
+            <Input value={labelYes} onChange={setLabelYes} placeholder="Urgent" />
+          </Field>
+        </div>
+      )}
 
       {kind === "bbox" && (
         <div className="space-y-2">
@@ -526,7 +570,7 @@ function PostTask() {
         </div>
       )}
 
-      {kind === "survey" && (
+      {(kind === "survey" || kind === "text") && (
         <div className="flex items-center gap-3">
           <button
             onClick={() => fileRef.current?.click()}
@@ -536,8 +580,9 @@ function PostTask() {
             {extracting ? "Reading…" : "Upload PDF or text"}
           </button>
           <span className="text-xs text-zinc-600">
-            Numbered, bulleted or plain — we&apos;ll split it into questions.
-            Check them before posting.
+            Numbered, bulleted or plain — we&apos;ll split it into
+            {kind === "text" ? " items" : " questions"}. Check them before
+            posting.
           </span>
           <input
             ref={fileRef}
@@ -558,7 +603,7 @@ function PostTask() {
             ? `Image URLs — one per line (${items.length})`
             : kind === "survey"
               ? `Questions — one per line (${items.length})`
-              : `Items to label — one per line (${items.length})`
+              : `Lines to label — one per line (${items.length})`
         }
       >
         <textarea
@@ -587,7 +632,9 @@ function PostTask() {
 
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 text-sm">
         <Row
-          label={kind === "survey" ? "Questions" : "Images"}
+          label={
+            kind === "survey" ? "Questions" : kind === "text" ? "Items" : "Images"
+          }
           value={String(items.length)}
         />
         {kind === "bbox" && specBytes > 0 && (
@@ -612,6 +659,8 @@ function PostTask() {
           about the contract changes.
         </p>
         <p className="mt-2 text-xs leading-relaxed text-zinc-600">
+          {kind === "text" &&
+            "Each line is a bounty: the first worker to answer it takes the reward and the line closes. Quick to read, quick to pay."}
           {kind === "bbox" &&
             "Each image is a bounty: the first worker to box it takes the reward and the image closes. \"Nothing here\" is a real answer and is paid too, because not paying it would teach workers to invent boxes."}
           {kind === "survey" &&

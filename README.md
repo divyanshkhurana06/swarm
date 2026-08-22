@@ -55,12 +55,18 @@ There is also a second, fully-tested authentication path that verifies **passkey
 
 A full passkey-authorised, paid-out answer costs **~206,000 gas** on Monad testnet — measured end to end by `scripts/e2e-onchain.ts` against the deployed contracts, not estimated. (The local Foundry measurement is 156k; the real chain is higher because storage slots start cold.) At 102 gwei that is about 0.021 MON per answer.
 
-## Two kinds of work, two ways of paying
+## Three kinds of work, two ways of paying
 
 | Task | Scoring | Why |
 |---|---|---|
 | **Image bounties** | First come — the first worker to box an image takes the reward and the image closes | Drawing a box is a specific, checkable claim. Racing for it is the right incentive; a vote would just slow it down. |
+| **Text labelling** | First come, per line | Read a line, answer yes or no. Same economics as an image bounty, different screen — so it shares the code path rather than inventing a third one. |
 | **Surveys** | Paid on completion of every question | A half-finished form is worth nothing to the requester, and paying per question would reward abandoning it after the easy ones. |
+
+Image bounties and text labelling are the same contract mode; what differs is
+presentation, which the task spec carries. Both text labelling and surveys
+accept a pasted list or a PDF, split into items the requester edits before
+posting.
 
 "Nothing here" is a real answer on a bounty and is paid for. Not paying it
 would teach workers to invent boxes, which is worse than useless data — it is

@@ -36,6 +36,22 @@ export enum Mode {
   Survey = 2,
 }
 
+/** What a worker is shown. The contract only knows how a task pays. */
+export type Kind = "bbox" | "text" | "survey";
+
+/**
+ * Presentation kind for a task.
+ *
+ * Read from the spec rather than the mode, because two categories share
+ * FirstCome: boxing an image and answering yes/no about a sentence pay the
+ * same way but are completely different screens.
+ */
+export function kindOf(task: Task): Kind {
+  if (task.mode === Mode.Survey) return "survey";
+  if (task.spec.kind === "text") return "text";
+  return "bbox";
+}
+
 export type TaskSpec = {
   title: string;
   question: string;

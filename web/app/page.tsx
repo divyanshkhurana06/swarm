@@ -10,6 +10,7 @@ import { packBox, type Box } from "@/lib/images";
 import { BoxDrawer } from "@/components/BoxDrawer";
 import {
   Mode,
+  kindOf,
   loadTasks,
   publicClient,
   surveyProgress,
@@ -197,7 +198,7 @@ function Worker() {
       inFlight.current += 1;
       const reward = task.rewardPerLabel;
       const isSurvey = task.mode === Mode.Survey;
-      const isBox = task.spec.kind === "bbox";
+      const isBox = kindOf(task) === "bbox";
 
       try {
         let body: Record<string, unknown>;
@@ -419,9 +420,10 @@ function Worker() {
 
   const item = queue?.[cursor];
   const total = queue?.length ?? 0;
-  const isSurvey = task.mode === Mode.Survey;
-  const isBox = task.spec.kind === "bbox";
-  const isImage = task.spec.kind === "image" || isBox;
+  const kind = kindOf(task);
+  const isSurvey = kind === "survey";
+  const isBox = kind === "bbox";
+  const isImage = isBox;
   const upcoming = isImage ? (queue ?? []).slice(cursor + 1, cursor + 4) : [];
 
   return (
@@ -711,7 +713,7 @@ function Finished({
 }
 
 function ModeBadge({ task }: { task: Task }) {
-  if (task.mode === Mode.Survey) return <Badge tone="sky">survey</Badge>;
+  if (kindOf(task) === "survey") return <Badge tone="sky">survey</Badge>;
   return <Badge tone="emerald">bounty · first come</Badge>;
 }
 

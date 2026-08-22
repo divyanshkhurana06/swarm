@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePrivy } from "@privy-io/react-auth";
 import { formatUnits } from "viem";
 import { DUSD_DECIMALS } from "@/lib/contracts";
-import { Mode, type Task } from "@/lib/tasks";
+import { Mode, kindOf, type Task } from "@/lib/tasks";
 import { SignOut } from "@/components/ui";
 
 /**
@@ -18,11 +18,9 @@ import { SignOut } from "@/components/ui";
 
 const money = (v: bigint) => `$${formatUnits(v, DUSD_DECIMALS)}`;
 
-export type Category = "bbox" | "survey";
+export type Category = "bbox" | "text" | "survey";
 
-export function categoryOf(task: Task): Category {
-  return task.mode === Mode.Survey ? "survey" : "bbox";
-}
+export const categoryOf = (task: Task): Category => kindOf(task);
 
 /** Only tasks that can actually be worked on right now. */
 export function isOpen(task: Task): boolean {
@@ -111,6 +109,13 @@ const CATEGORIES: {
     accent: "from-sky-500/20 to-sky-500/5 ring-sky-500/25",
   },
   {
+    key: "text",
+    title: "Text labelling",
+    blurb: "Read it, answer yes or no. First to answer takes it.",
+    icon: "📝",
+    accent: "from-violet-500/20 to-violet-500/5 ring-violet-500/25",
+  },
+  {
     key: "survey",
     title: "Surveys",
     blurb: "Answer in your own words. Paid on completion.",
@@ -195,7 +200,11 @@ export function BountyAlert({
           <div className="truncate font-medium">{task.spec.title}</div>
           <div className="text-xs text-zinc-500">
             {task.itemCount}{" "}
-            {task.mode === Mode.Survey ? "questions" : "images"} ·{" "}
+            {kindOf(task) === "survey"
+              ? "questions"
+              : kindOf(task) === "text"
+                ? "items"
+                : "images"} ·{" "}
             {money(task.rewardPerLabel)} each
           </div>
         </div>
@@ -236,7 +245,11 @@ export function TaskRow({ task, onPick }: { task: Task; onPick: () => void }) {
       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-600">
         <span>
           {task.itemCount}{" "}
-          {task.mode === Mode.Survey ? "questions" : "images"}
+          {kindOf(task) === "survey"
+            ? "questions"
+            : kindOf(task) === "text"
+              ? "items"
+              : "images"}
         </span>
         <span>·</span>
         <span>{task.answers} done</span>

@@ -262,7 +262,7 @@ function LabelRows({ task, rows }: { task: Task; rows: Row[] | null }) {
     );
   }
 
-  const isImage = task.spec.kind === "image";
+  const isImage = task.spec.kind === "bbox";
 
   return (
     <div className="overflow-hidden rounded-2xl border border-zinc-800">
