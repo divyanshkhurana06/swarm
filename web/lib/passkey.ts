@@ -151,16 +151,52 @@ export function clearIdentity() {
 }
 
 /** Creates a passkey and derives the worker identity from its public key. */
-export async function createIdentity(label = "Swarm worker"): Promise<Identity> {
+const HANDLE_KEY = "swarm.userhandle";
+
+/**
+ * A stable WebAuthn user handle for this device.
+ *
+ * An authenticator replaces an existing credential when (rpId, user.id)
+ * matches, and creates an additional one when it does not. Generating a fresh
+ * random handle per registration therefore made every tap of "Start earning"
+ * look like a different person, so passkeys accumulated instead of being
+ * replaced -- which is how three testers produced five worker identities.
+ */
+function userHandle(): Uint8Array {
+  const stored = localStorage.getItem(HANDLE_KEY);
+  if (stored) return fromB64url(stored);
+
+  const fresh = crypto.getRandomValues(new Uint8Array(16));
+  localStorage.setItem(HANDLE_KEY, b64url(fresh));
+  return fresh;
+}
+
+export async function createIdentity(): Promise<Identity> {
+  const existing = loadIdentity();
+
+  // Name the passkey after the deployment it belongs to. Identical names are
+  // unusable in the OS picker, and a worker with passkeys from an older
+  // deployment cannot otherwise tell which one is current.
+  const label = `Swarm · ${TASK_POOL.slice(2, 6)}`;
+
   const cred = (await navigator.credentials.create({
     publicKey: {
-      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      challenge: crypto.getRandomValues(new Uint8Array(32)) as BufferSource,
       rp: { name: "Swarm" },
       user: {
-        id: crypto.getRandomValues(new Uint8Array(16)),
+        id: userHandle() as BufferSource,
         name: label,
         displayName: label,
       },
+      // Don't mint a second passkey when this device already has one.
+      excludeCredentials: existing
+        ? [
+            {
+              type: "public-key" as const,
+              id: fromB64url(existing.credentialId) as BufferSource,
+            },
+          ]
+        : [],
       // -7 is ES256: ECDSA over P256 with SHA-256. This is the only algorithm
       // the on-chain verifier understands, so we do not offer alternatives.
       pubKeyCredParams: [{ type: "public-key", alg: -7 }],

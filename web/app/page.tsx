@@ -188,8 +188,13 @@ export default function Worker() {
         workerId ===
         "0x0000000000000000000000000000000000000000000000000000000000000000"
       ) {
+        // Almost always means the chosen passkey belongs to an earlier
+        // deployment. Name the credential so the failure is diagnosable
+        // rather than mysterious.
         throw new Error(
-          "That passkey isn't registered here yet — tap Start earning instead."
+          `That passkey (${credentialHash.slice(0, 10)}…) has no account on ` +
+            `contract ${TASK_POOL.slice(0, 6)}…${TASK_POOL.slice(-4)}. ` +
+            `It's probably from an older version — tap "Start earning" to make a new one.`
         );
       }
 

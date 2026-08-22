@@ -10,8 +10,9 @@
  *   npx tsx lib/passkey.test.ts
  */
 
-import { generateKeyPairSync, sign as nodeSign } from "node:crypto";
-import { findChallengeIndex, parseDerSignature } from "./passkey";
+import { generateKeyPairSync, sign as nodeSign, randomBytes } from "node:crypto";
+import { credentialHashOf, findChallengeIndex, parseDerSignature } from "./passkey";
+import { keccak256 } from "viem";
 
 let checked = 0;
 let failed = 0;
@@ -107,6 +108,34 @@ for (let i = 0; i < 500; i++) {
   check(
     "challenge index is a byte offset, not a string index",
     json.subarray(idx, idx + 6).toString() === "xyz789"
+  );
+}
+
+// --- credential id round-trip ------------------------------------------------
+// Registration hashes the credential id to derive the on-chain lookup key, and
+// sign-in hashes it again on a possibly different device. If base64url
+// encoding and decoding are not exact inverses -- for every length, including
+// the ones that need padding -- the two hashes differ and the worker cannot
+// recover their account. Credential ids are whatever length the authenticator
+// chooses, so test all of them.
+
+function b64urlRef(b: Uint8Array): string {
+  return Buffer.from(b)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+for (let len = 1; len <= 80; len++) {
+  const raw = new Uint8Array(randomBytes(len));
+  const encoded = b64urlRef(raw);
+
+  // The hash the contract stores must equal the hash computed from the
+  // credential id alone.
+  check(
+    `credentialHash round-trips at ${len} bytes`,
+    credentialHashOf(encoded) === keccak256(raw)
   );
 }
 
