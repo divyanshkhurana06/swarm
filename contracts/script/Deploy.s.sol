@@ -9,33 +9,29 @@ import {DemoUSD} from "../src/DemoUSD.sol";
 ///
 ///   forge script script/Deploy.s.sol --rpc-url monad_testnet --broadcast
 contract Deploy is Script {
-    /// 3 cents an answer, at 6 decimals. Priced so a finished batch is worth
-    /// something a person would notice; half a cent reads as a toy.
-    uint96 constant REWARD_PER_LABEL = 30_000;
+    /// 5 cents a box, at 6 decimals. A box takes longer than a tap and can
+    /// only be claimed once, so it is priced as a bounty.
+    uint96 constant REWARD_PER_LABEL = 50_000;
 
     /// Enough that a room of sixty cannot drain it mid-demo.
     uint128 constant POOL = 100_000_000;
 
-    uint32 constant ITEMS = 12;
+    uint32 constant ITEMS = 6;
 
     /// The task lives on-chain so a worker needs nothing but the contract.
+    /// An image bounty: box the target, first to answer takes it.
     string constant SPEC =
-        '{"title":"Comment moderation",'
-        '"question":"Should this comment be flagged for review?",'
-        '"answers":{"0":"Looks fine","1":"Flag it"},'
+        '{"title":"Dashcam frames",'
+        '"question":"Draw a box around any car",'
+        '"kind":"bbox",'
+        '"answers":{"0":"Nothing here","1":"Found it"},'
         '"items":['
-        '{"id":0,"text":"Genuinely the best explanation of gradient descent I have read."},'
-        '{"id":1,"text":"CONGRATULATIONS!! You have been selected. Claim your reward before it expires!!!"},'
-        '{"id":2,"text":"I disagree with the conclusion but the methodology section is solid."},'
-        '{"id":3,"text":"Make $5000/week from home. DM me for details. No experience needed."},'
-        '{"id":4,"text":"Has anyone benchmarked this against the older version?"},'
-        '{"id":5,"text":"you clearly have no idea what you are talking about and should stop posting"},'
-        '{"id":6,"text":"Thanks for the writeup, the caching section cleared something up for me."},'
-        '{"id":7,"text":"FREE CRYPTO AIRDROP connect your wallet here to claim now limited time"},'
-        '{"id":8,"text":"The build fails on Node 18 for me. Anyone else hitting this?"},'
-        '{"id":9,"text":"buy followers cheap fast delivery guaranteed check bio link"},'
-        '{"id":10,"text":"Small typo in the third paragraph - recieve should be receive."},'
-        '{"id":11,"text":"URGENT: your account will be suspended. Verify your password immediately."}'
+        '{"id":0,"text":"https://images.unsplash.com/photo-1503376780353-7e6692767b70?w=700"},'
+        '{"id":1,"text":"https://images.unsplash.com/photo-1502877338535-766e1452684a?w=700"},'
+        '{"id":2,"text":"https://images.unsplash.com/photo-1493238792000-8113da705763?w=700"},'
+        '{"id":3,"text":"https://images.unsplash.com/photo-1552519507-da3b142c6e3d?w=700"},'
+        '{"id":4,"text":"https://images.unsplash.com/photo-1541899481282-d53bffe3c35d?w=700"},'
+        '{"id":5,"text":"https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=700"}'
         "]}";
 
     function run() external {
@@ -62,11 +58,11 @@ contract Deploy is Script {
     }
 
     /// @dev Split out so the locals do not overflow the stack.
-    ///      Text labelling is majority-scored: three people answer each item
-    ///      and only those who agreed with the crowd are paid.
+    ///      A bounty: first worker to box an image takes it, and the image
+    ///      closes, so quorum is one.
     function _seed(TaskPool pool, uint256 pk, address deployer) private returns (uint256) {
-        uint8 mode = uint8(TaskPool.Mode.Majority);
-        uint8 quorum = 3;
+        uint8 mode = uint8(TaskPool.Mode.FirstCome);
+        uint8 quorum = 1;
 
         (uint8 v, bytes32 r, bytes32 s) =
             vm.sign(pk, pool.postDigest(SPEC, REWARD_PER_LABEL, POOL, ITEMS, mode, quorum));

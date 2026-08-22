@@ -8,6 +8,7 @@ import { DUSD_DECIMALS, explorerTx } from "@/lib/contracts";
 import { signPostTask, type SigningWallet } from "@/lib/wallet";
 import { publicClient, tasksBy, type Task } from "@/lib/tasks";
 import { extractPdfText, looksLikeQuestion, splitIntoQuestions } from "@/lib/survey";
+import { prepareImage, MAX_BYTES_PER_IMAGE } from "@/lib/images";
 import { Shell, Field, Input, WalletBar } from "@/components/ui";
 
 /**
@@ -21,7 +22,7 @@ import { Shell, Field, Input, WalletBar } from "@/components/ui";
  *   Survey   long-form, paid only when the whole response is finished
  */
 
-type Kind = "image" | "text" | "survey";
+type Kind = "bbox" | "survey";
 
 const KINDS: {
   key: Kind;
@@ -31,43 +32,23 @@ const KINDS: {
   placeholder: string;
   defaultQuorum: number;
   defaultCents: string;
-  hints: { title: string; question: string; no: string; yes: string };
+  hints: { title: string; question: string };
 }[] = [
   {
-    key: "image",
+    key: "bbox",
     mode: 0,
-    title: "Image labelling",
-    blurb: "Objective and quick. First to answer is paid, no waiting.",
-    placeholder:
-      "https://images.example.com/street-1.jpg\nhttps://images.example.com/street-2.jpg",
-    defaultQuorum: 2,
-    // Two cents an answer: enough that ten images is worth twenty, which is
-    // the point at which doing it feels like earning rather than a demo.
-    defaultCents: "2",
-    hints: {
-      title: "Street scenes",
-      question: "Is there a car in this image?",
-      no: "No car",
-      yes: "Car",
-    },
-  },
-  {
-    key: "text",
-    mode: 1,
-    title: "Text labelling",
+    title: "Image bounty",
     blurb:
-      "Judgement calls. Several people answer and only those who agree with the majority are paid.",
+      "Upload photos; workers draw a box around the thing you're after. First to answer takes the bounty.",
     placeholder:
-      "The site is down for all our users right now.\nHow do I change my avatar?\nBilling charged me twice this month.",
-    defaultQuorum: 3,
-    // Priced above images: the worker carries the risk of disagreeing with
-    // the crowd, so the expected value has to survive that.
-    defaultCents: "3",
+      "Or paste image URLs, one per line:\nhttps://images.example.com/street-1.jpg",
+    defaultQuorum: 1,
+    // A box takes longer than a tap and can only be claimed once, so it is
+    // priced as a bounty rather than piecework.
+    defaultCents: "5",
     hints: {
-      title: "Support ticket triage",
-      question: "Is this ticket urgent?",
-      no: "Not urgent",
-      yes: "Urgent",
+      title: "Dashcam frames",
+      question: "Draw a box around any car",
     },
   },
   {
@@ -79,14 +60,11 @@ const KINDS: {
     placeholder:
       "What made you choose us over the alternatives?\nHow often do you use the product?\nWhat would make you recommend it to a colleague?",
     defaultQuorum: 1,
-    // Written answers take a minute of real thought, so they are priced an
-    // order of magnitude above a tap.
+    // Written answers take a minute of real thought.
     defaultCents: "15",
     hints: {
       title: "Customer research",
       question: "Answer in your own words",
-      no: "",
-      yes: "",
     },
   },
 ];
@@ -113,16 +91,14 @@ function PostTask() {
   const wallet = wallets.find((w) => w.walletClientType === "privy") ?? wallets[0];
   const address = wallet?.address as Hex | undefined;
 
-  const [kind, setKind] = useState<Kind>("text");
+  const [kind, setKind] = useState<Kind>("bbox");
   const kindInfo = KINDS.find((k) => k.key === kind)!;
 
   const [title, setTitle] = useState("");
   const [question, setQuestion] = useState("");
-  const [labelNo, setLabelNo] = useState("");
-  const [labelYes, setLabelYes] = useState("");
   const [raw, setRaw] = useState("");
-  const [rewardCents, setRewardCents] = useState("3");
-  const [quorum, setQuorum] = useState(3);
+  const [rewardCents, setRewardCents] = useState("5");
+  const [quorum, setQuorum] = useState(1);
 
   const [extracting, setExtracting] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -130,6 +106,9 @@ function PostTask() {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ hash: Hex } | null>(null);
   const [mine, setMine] = useState<Task[] | null>(null);
+  const [uploaded, setUploaded] = useState<{ dataUri: string; name: string }[]>(
+    []
+  );
   const fileRef = useRef<HTMLInputElement>(null);
 
   // A requester who cannot find the answers they paid for has bought nothing.
@@ -140,12 +119,24 @@ function PostTask() {
 
   const items = useMemo(() => {
     if (kind === "survey") return splitIntoQuestions(raw);
-    return raw
+
+    // Uploaded photos first, then any pasted URLs.
+    const urls = raw
       .split("\n")
       .map((t) => t.trim())
-      .filter(Boolean)
-      .map((text, id) => ({ id, text }));
-  }, [raw, kind]);
+      .filter((t) => t.startsWith("http"));
+
+    return [...uploaded.map((u) => u.dataUri), ...urls].map((text, id) => ({
+      id,
+      text,
+    }));
+  }, [raw, kind, uploaded]);
+
+  /** Roughly what the task spec will cost to store. */
+  const specBytes = useMemo(
+    () => items.reduce((n, i) => n + i.text.length, 0),
+    [items]
+  );
 
   // Entered in cents: "0.005 DUSD" means nothing to someone deciding what a
   // judgement is worth.
@@ -166,6 +157,31 @@ function PostTask() {
     setKind(next);
     setQuorum(info.defaultQuorum);
     setRewardCents(info.defaultCents);
+  };
+
+  const onImages = async (files: File[]) => {
+    setError(null);
+    setExtracting(true);
+    try {
+      const prepared: { dataUri: string; name: string }[] = [];
+      for (const f of files) {
+        const img = await prepareImage(f);
+        if (img.bytes > MAX_BYTES_PER_IMAGE) {
+          setError(
+            `${f.name} is still ${Math.round(img.bytes / 1000)}KB after shrinking — try a simpler photo.`
+          );
+          continue;
+        }
+        prepared.push({ dataUri: img.dataUri, name: img.name });
+      }
+      setUploaded((p) => [...p, ...prepared]);
+    } catch (e) {
+      setError(
+        `Could not read that image: ${e instanceof Error ? e.message : String(e)}`
+      );
+    } finally {
+      setExtracting(false);
+    }
   };
 
   const onFile = async (file: File) => {
@@ -204,10 +220,6 @@ function PostTask() {
       setError("Give the batch a name and tell workers what to decide");
       return;
     }
-    if (kind !== "survey" && (!labelNo.trim() || !labelYes.trim())) {
-      setError("Name both answers so workers know what they're choosing");
-      return;
-    }
 
     setError(null);
     setBusy(true);
@@ -216,7 +228,7 @@ function PostTask() {
         title,
         question,
         kind,
-        answers: { "0": labelNo, "1": labelYes },
+        answers: { "0": "Nothing here", "1": "Found it" },
         items,
       });
 
@@ -267,8 +279,6 @@ function PostTask() {
     funding,
     title,
     question,
-    labelNo,
-    labelYes,
     kind,
     kindInfo,
     quorum,
@@ -405,14 +415,55 @@ function PostTask() {
         />
       </Field>
 
-      {kind !== "survey" && (
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Answer A">
-            <Input value={labelNo} onChange={setLabelNo} placeholder={kindInfo.hints.no} />
-          </Field>
-          <Field label="Answer B">
-            <Input value={labelYes} onChange={setLabelYes} placeholder={kindInfo.hints.yes} />
-          </Field>
+
+      {kind === "bbox" && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => fileRef.current?.click()}
+              disabled={extracting}
+              className="rounded-xl border border-zinc-700 px-4 py-2.5 text-sm font-medium disabled:opacity-40"
+            >
+              {extracting ? "Shrinking…" : "Upload JPG / PNG"}
+            </button>
+            <span className="text-xs text-zinc-600">
+              Stored on-chain, so they&apos;re downscaled hard
+            </span>
+          </div>
+          {uploaded.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {uploaded.map((u, i) => (
+                <div key={i} className="relative">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={u.dataUri}
+                    alt={u.name}
+                    className="h-16 w-16 rounded-lg border border-zinc-800 object-cover"
+                  />
+                  <button
+                    onClick={() =>
+                      setUploaded((p) => p.filter((_, j) => j !== i))
+                    }
+                    className="absolute -right-1.5 -top-1.5 h-5 w-5 rounded-full bg-zinc-800 text-xs text-zinc-300"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/jpeg,image/png"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []);
+              if (files.length) onImages(files);
+              e.target.value = "";
+            }}
+          />
         </div>
       )}
 
@@ -443,7 +494,7 @@ function PostTask() {
 
       <Field
         label={
-          kind === "image"
+          kind === "bbox"
             ? `Image URLs — one per line (${items.length})`
             : kind === "survey"
               ? `Questions — one per line (${items.length})`
@@ -472,20 +523,16 @@ function PostTask() {
         >
           <Input value={rewardCents} onChange={setRewardCents} mono />
         </Field>
-        {kind !== "survey" && (
-          <Field label="Answers per item">
-            <Input
-              value={String(quorum)}
-              onChange={(v) => setQuorum(Math.max(1, Math.min(9, Number(v) || 1)))}
-              mono
-            />
-          </Field>
-        )}
       </div>
 
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 text-sm">
-        <Row label={kind === "survey" ? "Questions" : "Items"} value={String(items.length)} />
-        {kind !== "survey" && <Row label="Answers each" value={String(quorum)} />}
+        <Row
+          label={kind === "survey" ? "Questions" : "Images"}
+          value={String(items.length)}
+        />
+        {kind === "bbox" && specBytes > 0 && (
+          <Row label="Stored on-chain" value={`${Math.round(specBytes / 1000)} KB`} />
+        )}
         <Row
           label="Escrowed now"
           value={`$${formatUnits(funding, DUSD_DECIMALS)}`}
@@ -499,10 +546,8 @@ function PostTask() {
           about the contract changes.
         </p>
         <p className="mt-2 text-xs leading-relaxed text-zinc-600">
-          {kind === "text" &&
-            "Everyone answers independently. Only those who agree with the majority are paid, so a worker guessing loses money rather than earning it. Whatever the crowd doesn't earn comes back to you."}
-          {kind === "image" &&
-            "Paid the moment an answer arrives — the task is objective enough that waiting for a vote would only slow it down."}
+          {kind === "bbox" &&
+            "Each image is a bounty: the first worker to box it takes the reward and the image closes. \"Nothing here\" is a real answer and is paid too, because not paying it would teach workers to invent boxes."}
           {kind === "survey" &&
             "A worker is paid for the whole response, once every question is answered. A half-filled form is worth nothing to you, so it earns nothing."}
         </p>

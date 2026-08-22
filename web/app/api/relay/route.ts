@@ -134,6 +134,23 @@ export async function POST(req: Request) {
         break;
       }
 
+      case "boxFor": {
+        const { taskId, itemId, box, worker, signature } = body as unknown as {
+          taskId: string;
+          itemId: string;
+          box: string;
+          worker: Hex;
+          signature: Hex;
+        };
+        hash = await wallet.writeContract({
+          address: TASK_POOL,
+          abi: taskPoolAbi,
+          functionName: "submitBoxFor",
+          args: [BigInt(taskId), BigInt(itemId), BigInt(box), worker, signature],
+        });
+        break;
+      }
+
       case "surveyFor": {
         const { taskId, itemId, answer, worker, signature } = body as unknown as {
           taskId: string;

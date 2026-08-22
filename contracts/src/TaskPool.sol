@@ -142,11 +142,25 @@ contract TaskPool {
     /// @notice Surveys already paid out, so completion pays exactly once.
     mapping(uint256 taskId => mapping(bytes32 workerId => bool)) public surveyPaid;
 
+    /// @notice Bounding boxes, packed as four uint16s: x | y | w | h.
+    /// @dev Stored in basis points of the image dimension (0..10000) rather
+    ///      than pixels, so a box drawn on a phone still lines up when the
+    ///      requester views it on a monitor. Zero means "nothing here", which
+    ///      is a real answer and worth paying for.
+    mapping(uint256 taskId => mapping(uint256 itemId => mapping(bytes32 workerId => uint64)))
+        public boxOf;
+
     /// @notice Everyone who completed a survey.
     /// @dev Without this a requester cannot enumerate the responses they paid
     ///      for -- and unreadable answers are not answers. Events are not an
     ///      option: the public RPC caps eth_getLogs at a 100-block range.
     mapping(uint256 taskId => bytes32[]) private _respondents;
+
+    /// @notice Everyone who answered anything on a task.
+    /// @dev `_respondents` means "completed the survey", which is the right
+    ///      list for survey exports and the wrong one for boxes -- a bounty
+    ///      worker who boxed a single image never "completes" anything.
+    mapping(uint256 taskId => bytes32[]) private _participants;
 
     uint256 public totalLabels;
     uint256 public totalPaid;
@@ -435,6 +449,7 @@ contract TaskPool {
 
         hasLabeled[taskId][workerId][itemId] = true;
         tally[taskId][itemId][answer]++;
+        if (answeredCount[taskId][workerId] == 0) _participants[taskId].push(workerId);
         answeredCount[taskId][workerId]++;
         t.labelCount++;
         answersBy[workerId]++;
@@ -707,6 +722,11 @@ contract TaskPool {
         }
     }
 
+    /// @notice Everyone who answered anything on this task.
+    function participants(uint256 taskId) external view returns (bytes32[] memory) {
+        return _participants[taskId];
+    }
+
     /// @notice Everyone who completed this survey.
     function respondents(uint256 taskId) external view returns (bytes32[] memory) {
         return _respondents[taskId];
@@ -726,6 +746,63 @@ contract TaskPool {
         answers = new string[](n);
         for (uint256 i = 0; i < n; i++) {
             answers[i] = surveyAnswer[taskId][i][workerId];
+        }
+    }
+
+    bytes32 private constant BOX_TYPEHASH =
+        keccak256("Box(uint256 taskId,uint256 itemId,uint64 box)");
+
+    function boxDigest(uint256 taskId, uint256 itemId, uint64 box)
+        public
+        view
+        returns (bytes32)
+    {
+        return EIP712.digest(
+            domainSeparator(), keccak256(abi.encode(BOX_TYPEHASH, taskId, itemId, box))
+        );
+    }
+
+    /// @notice Mark where the thing is, not just whether it is there.
+    /// @dev Runs through the same accounting as a yes/no answer -- a non-zero
+    ///      box counts as "found it", zero as "nothing here" -- so bounties
+    ///      inherit first-come payment and the completion receipt for free.
+    function submitBoxFor(
+        uint256 taskId,
+        uint256 itemId,
+        uint64 box,
+        address worker,
+        bytes calldata signature
+    ) external {
+        if (worker == address(0)) revert NotRegistered();
+        if (EIP712.recover(boxDigest(taskId, itemId, box), signature) != worker) {
+            revert BadSignature();
+        }
+
+        bytes32 workerId = idOfAddress(worker);
+        if (!isRegistered[workerId]) {
+            isRegistered[workerId] = true;
+            unchecked {
+                workerCount++;
+            }
+            emit WorkerRegistered(workerId, uint256(uint160(worker)), 0);
+        }
+
+        boxOf[taskId][itemId][workerId] = box;
+        _credit(taskId, itemId, box == 0 ? 0 : 1, workerId);
+    }
+
+    /// @notice Every box drawn on a task, for export.
+    function boxes(uint256 taskId, bytes32[] calldata workerIds)
+        external
+        view
+        returns (uint64[] memory out)
+    {
+        uint256 n = itemCount[taskId];
+        out = new uint64[](n * workerIds.length);
+        for (uint256 w = 0; w < workerIds.length; w++) {
+            for (uint256 i = 0; i < n; i++) {
+                out[w * n + i] = boxOf[taskId][i][workerIds[w]];
+            }
         }
     }
 

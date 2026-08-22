@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { chain } from "@/lib/contracts";
+import { useEffect, useState } from "react";
+import { formatUnits } from "viem";
+import { chain, DUSD_DECIMALS } from "@/lib/contracts";
+import { walletBalances } from "@/lib/tasks";
 
 export function Shell({
   children,
@@ -36,6 +38,24 @@ export function WalletBar({
   email?: string;
 }) {
   const [copied, setCopied] = useState(false);
+  const [held, setHeld] = useState<{ dusd: bigint; nfts: number } | null>(null);
+
+  // Show what is actually in the wallet. Withdrawing sends funds to this
+  // address, not to whatever wallet app the worker happens to have installed
+  // -- so without this the money looks like it went nowhere.
+  useEffect(() => {
+    let cancelled = false;
+    const sync = () =>
+      walletBalances(address as `0x${string}`).then((b) => {
+        if (!cancelled) setHeld(b);
+      });
+    sync();
+    const t = setInterval(sync, 6000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [address]);
 
   const copy = async () => {
     try {
@@ -63,8 +83,18 @@ export function WalletBar({
         </button>
       </div>
       <div className="flex shrink-0 items-center gap-2">
+        {held && (
+          <div className="text-right">
+            <div className="text-sm font-semibold tabular-nums text-emerald-400">
+              ${formatUnits(held.dusd, DUSD_DECIMALS)}
+            </div>
+            <div className="text-[10px] text-zinc-600">
+              in wallet{held.nfts > 0 ? ` · ${held.nfts} NFT` : ""}
+            </div>
+          </div>
+        )}
         {email && (
-          <span className="hidden max-w-[9rem] truncate text-xs text-zinc-600 sm:block">
+          <span className="hidden max-w-[8rem] truncate text-xs text-zinc-600 sm:block">
             {email}
           </span>
         )}

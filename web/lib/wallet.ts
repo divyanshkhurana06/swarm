@@ -31,6 +31,11 @@ const types = {
     { name: "mode", type: "uint8" },
     { name: "quorum", type: "uint8" },
   ],
+  Box: [
+    { name: "taskId", type: "uint256" },
+    { name: "itemId", type: "uint256" },
+    { name: "box", type: "uint64" },
+  ],
   SurveyAnswer: [
     { name: "taskId", type: "uint256" },
     { name: "itemId", type: "uint256" },
@@ -57,7 +62,7 @@ export type SigningWallet = {
 
 async function signTypedData(
   wallet: SigningWallet,
-  primaryType: "Label" | "Withdraw" | "PostTask" | "SurveyAnswer",
+  primaryType: "Label" | "Withdraw" | "PostTask" | "SurveyAnswer" | "Box",
   message: Record<string, string>
 ): Promise<Hex> {
   const provider = await wallet.getEthereumProvider();
@@ -115,6 +120,20 @@ export function signPostTask(
     items: items.toString(),
     mode: mode.toString(),
     quorum: quorum.toString(),
+  });
+}
+
+/** Signs the packed bounding box, so the coordinates cannot be edited later. */
+export function signBox(
+  wallet: SigningWallet,
+  taskId: bigint,
+  itemId: bigint,
+  box: bigint
+): Promise<Hex> {
+  return signTypedData(wallet, "Box", {
+    taskId: taskId.toString(),
+    itemId: itemId.toString(),
+    box: box.toString(),
   });
 }
 

@@ -470,6 +470,94 @@ contract TaskPoolTest is Test {
         pool.submitSurveyFor(id, 0, "whatever", who, abi.encodePacked(r, sg, v));
     }
 
+    // --- bounding boxes (bounty labelling) --------------------------------
+
+    function _pack(uint16 x, uint16 y, uint16 w, uint16 h) internal pure returns (uint64) {
+        return (uint64(x) << 48) | (uint64(y) << 32) | (uint64(w) << 16) | uint64(h);
+    }
+
+    function _drawBox(uint256 pk, uint256 task, uint256 item, uint64 box) internal {
+        address who = vm.addr(pk);
+        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(pk, pool.boxDigest(task, item, box));
+        pool.submitBoxFor(task, item, box, who, abi.encodePacked(r, sg, v));
+    }
+
+    function test_Box_IsStoredAndPaidFirstCome() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 1);
+        uint64 box = _pack(1000, 2000, 3000, 4000);
+
+        _drawBox(PK_A, id, 0, box);
+
+        bytes32 wid = pool.idOfAddress(vm.addr(PK_A));
+        assertEq(pool.boxOf(id, 0, wid), box, "the box itself is recorded");
+        assertEq(pool.earned(wid), REWARD, "a bounty pays on submission");
+    }
+
+    function test_Box_ZeroMeansNothingHereAndStillPays() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 1);
+        _drawBox(PK_A, id, 0, 0);
+
+        bytes32 wid = pool.idOfAddress(vm.addr(PK_A));
+        assertEq(pool.boxOf(id, 0, wid), 0);
+        // "There is no car in this image" is a real answer and worth paying
+        // for; not paying it would teach workers to invent boxes.
+        assertEq(pool.earned(wid), REWARD, "an honest negative is paid");
+        assertEq(pool.tally(id, 0, 0), 1, "counted as 'nothing here'");
+    }
+
+    function test_Box_RevertWhen_CoordinatesAreTamperedWith() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 1);
+        address who = vm.addr(PK_A);
+        uint64 signed = _pack(10, 10, 100, 100);
+        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(PK_A, pool.boxDigest(id, 0, signed));
+
+        vm.expectRevert(TaskPool.BadSignature.selector);
+        pool.submitBoxFor(id, 0, _pack(50, 50, 900, 900), who, abi.encodePacked(r, sg, v));
+    }
+
+    function test_Box_ClosesTheItemAtQuorum() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 1);
+        _drawBox(PK_A, id, 0, _pack(1, 2, 3, 4));
+
+        address who = vm.addr(PK_B);
+        uint64 box = _pack(5, 6, 7, 8);
+        (uint8 v, bytes32 r, bytes32 sg) = vm.sign(PK_B, pool.boxDigest(id, 0, box));
+
+        // First come, first served: the bounty on this image is gone.
+        vm.expectRevert(TaskPool.ItemFull.selector);
+        pool.submitBoxFor(id, 0, box, who, abi.encodePacked(r, sg, v));
+    }
+
+    function test_Box_ParticipantsAreTrackedForExport() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 2);
+        _drawBox(PK_A, id, 0, _pack(1, 2, 3, 4));
+        _drawBox(PK_B, id, 0, _pack(5, 6, 7, 8));
+        _drawBox(PK_A, id, 1, _pack(9, 9, 9, 9));
+
+        // A bounty worker never "completes" a task, so the survey respondent
+        // list would leave their boxes unreadable.
+        assertEq(pool.participants(id).length, 2, "each worker listed once");
+        assertEq(pool.respondents(id).length, 0, "not a survey");
+    }
+
+    function test_Box_ExportsForEveryWorker() public {
+        uint256 id = _postTask(1_000_000, 2, TaskPool.Mode.FirstCome, 2);
+        _drawBox(PK_A, id, 0, _pack(100, 200, 300, 400));
+        _drawBox(PK_B, id, 0, _pack(110, 210, 310, 410));
+        _drawBox(PK_A, id, 1, _pack(500, 500, 500, 500));
+
+        bytes32[] memory ids = new bytes32[](2);
+        ids[0] = pool.idOfAddress(vm.addr(PK_A));
+        ids[1] = pool.idOfAddress(vm.addr(PK_B));
+
+        uint64[] memory out = pool.boxes(id, ids);
+        assertEq(out.length, 4, "two workers x two items");
+        assertEq(out[0], _pack(100, 200, 300, 400));
+        assertEq(out[1], _pack(500, 500, 500, 500));
+        assertEq(out[2], _pack(110, 210, 310, 410));
+        assertEq(out[3], 0, "worker B never answered item 1");
+    }
+
     // --- completion receipts ----------------------------------------------
 
     function test_Receipt_MintsWhenTheWorkerFinishesATask() public {
@@ -640,7 +728,10 @@ contract TaskPoolTest is Test {
         uint256 used = before - gasleft();
 
         console.log("gas per passkey-authorised label:", used);
-        assertLt(used, 250_000, "a single label must stay cheap");
+        // Grew from ~230k when task participants started being recorded: one
+        // extra array push on a worker's first answer. That is the price of
+        // being able to export who did the work, and worth paying.
+        assertLt(used, 320_000, "a single label must stay cheap");
     }
 
     // ---------------------------------------------------------------------

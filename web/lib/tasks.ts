@@ -164,6 +164,33 @@ export async function unansweredItems(
   return checks.filter((i): i is Item => i !== null);
 }
 
+/** Live token + receipt balances for a wallet, so a worker can see the money. */
+export async function walletBalances(address: Hex) {
+  const usd = process.env.NEXT_PUBLIC_DEMO_USD as Hex;
+  const receipts = process.env.NEXT_PUBLIC_RECEIPTS as Hex;
+
+  const erc20 = [
+    {
+      name: "balanceOf",
+      type: "function",
+      stateMutability: "view",
+      inputs: [{ type: "address" }],
+      outputs: [{ type: "uint256" }],
+    },
+  ] as const;
+
+  const [dusd, nfts] = await Promise.all([
+    publicClient
+      .readContract({ address: usd, abi: erc20, functionName: "balanceOf", args: [address] })
+      .catch(() => 0n),
+    publicClient
+      .readContract({ address: receipts, abi: erc20, functionName: "balanceOf", args: [address] })
+      .catch(() => 0n),
+  ]);
+
+  return { dusd: dusd as bigint, nfts: Number(nfts) };
+}
+
 /** Completed survey responses, question by question, per respondent. */
 export async function loadSurveyResponses(task: Task) {
   const ids = await read<readonly Hex[]>("respondents", [BigInt(task.id)]);
@@ -202,6 +229,27 @@ export async function loadResults(task: Task) {
       agreement: total === 0 ? 0 : Math.max(no, yes) / total,
     };
   });
+}
+
+/** Every box drawn on a bounty task, for review and export. */
+export async function loadBoxes(task: Task) {
+  // Anyone who answered an item is a worker on this task; boxes are keyed by
+  // worker, so collect the ids from the completion receipts we know about.
+  const ids = await read<readonly Hex[]>("respondents", [BigInt(task.id)]).catch(
+    () => [] as readonly Hex[]
+  );
+  if (ids.length === 0) return [];
+
+  const flat = await read<readonly bigint[]>("boxes", [BigInt(task.id), ids]);
+  const n = task.itemCount;
+
+  return task.spec.items.map((item, i) => ({
+    id: item.id,
+    src: item.text,
+    drawn: ids
+      .map((workerId, w) => ({ workerId, packed: flat[w * n + i] ?? 0n }))
+      .filter((b) => b.packed !== 0n),
+  }));
 }
 
 /** address -> the left-padded worker id the ledger uses. */

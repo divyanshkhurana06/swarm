@@ -5,7 +5,9 @@ import Link from "next/link";
 import { usePrivy, useWallets } from "@privy-io/react-auth";
 import { formatUnits, type Hex } from "viem";
 import { chain, TASK_POOL, taskPoolAbi, DUSD_DECIMALS, explorerTx } from "@/lib/contracts";
-import { signLabel, signSurveyAnswer, type SigningWallet } from "@/lib/wallet";
+import { signBox, signLabel, signSurveyAnswer, type SigningWallet } from "@/lib/wallet";
+import { packBox, type Box } from "@/lib/images";
+import { BoxDrawer } from "@/components/BoxDrawer";
 import {
   Mode,
   loadTasks,
@@ -17,6 +19,16 @@ import {
   type Task,
 } from "@/lib/tasks";
 import { Badge, MoneyPop, Shell, WalletBar } from "@/components/ui";
+import {
+  BountyAlert,
+  CategoryPicker,
+  IdentityCard,
+  TaskRow,
+  categoryOf,
+  isOpen,
+  type Category,
+} from "@/components/WorkerHome";
+import { walletBalances } from "@/lib/tasks";
 
 type Pop = { id: number; label: string };
 
@@ -51,12 +63,21 @@ function Worker() {
   const { wallets } = useWallets();
 
   const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [category, setCategory] = useState<Category | null>(null);
+  const [held, setHeld] = useState<{ dusd: bigint; nfts: number }>({
+    dusd: 0n,
+    nfts: 0,
+  });
+  const [streak, setStreak] = useState(0);
+  const [alert, setAlert] = useState<Task | null>(null);
+  const seen = useRef<Set<number> | null>(null);
   const [task, setTask] = useState<Task | null>(null);
   const [queue, setQueue] = useState<Item[] | null>(null);
   const [cursor, setCursor] = useState(0);
   const [earned, setEarned] = useState<bigint>(0n);
   const [pendingVotes, setPendingVotes] = useState(0);
   const [text, setText] = useState("");
+  const [box, setBox] = useState<Box | null>(null);
   const [pops, setPops] = useState<Pop[]>([]);
   const [bump, setBump] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -80,7 +101,32 @@ function Worker() {
       });
   }, []);
 
-  useEffect(refreshTasks, [refreshTasks]);
+  useEffect(() => {
+    refreshTasks();
+    const t = setInterval(refreshTasks, 12_000);
+    return () => clearInterval(t);
+  }, [refreshTasks]);
+
+  // Announce only tasks that appear after this screen loaded. Announcing the
+  // ones already there would be noise; the point is that it just happened.
+  useEffect(() => {
+    if (!tasks) return;
+    if (seen.current === null) {
+      seen.current = new Set(tasks.map((t) => t.id));
+      return;
+    }
+    const fresh = tasks.find((t) => !seen.current!.has(t.id) && isOpen(t));
+    tasks.forEach((t) => seen.current!.add(t.id));
+    if (fresh) setAlert(fresh);
+  }, [tasks]);
+
+  useEffect(() => {
+    if (!address) return;
+    const sync = () => walletBalances(address).then(setHeld).catch(() => {});
+    sync();
+    const t = setInterval(sync, 6000);
+    return () => clearInterval(t);
+  }, [address]);
 
   // Only offer what this worker hasn't answered. One answer per worker per
   // item, so replaying from the top after a reload would revert.
@@ -89,6 +135,7 @@ function Worker() {
     let cancelled = false;
     setQueue(null);
     setText("");
+    setBox(null);
     unansweredItems(task, workerId).then((items) => {
       if (cancelled) return;
       setQueue(items);
@@ -130,6 +177,9 @@ function Worker() {
   const advance = (reward: bigint, credited: boolean) => {
     setCursor((c) => c + 1);
     setText("");
+    setBox(null);
+    setStreak((v) => v + 1);
+
     if (credited) {
       setEarned((e) => e + reward);
       setBump((b) => b + 1);
@@ -138,7 +188,7 @@ function Worker() {
   };
 
   const submit = useCallback(
-    async (value: number | string) => {
+    async (value: number | string | Box | null) => {
       if (!wallet || !address || !task || !queue || busy) return;
       const item = queue[cursor];
       if (!item) return;
@@ -148,11 +198,28 @@ function Worker() {
       inFlight.current += 1;
       const reward = task.rewardPerLabel;
       const isSurvey = task.mode === Mode.Survey;
+      const isBox = task.spec.kind === "bbox";
 
       try {
         let body: Record<string, unknown>;
 
-        if (isSurvey) {
+        if (isBox) {
+          const packed = packBox(value as Box | null);
+          const signature = await signBox(
+            wallet as unknown as SigningWallet,
+            BigInt(task.id),
+            BigInt(item.id),
+            packed
+          );
+          body = {
+            action: "boxFor",
+            taskId: String(task.id),
+            itemId: String(item.id),
+            box: packed.toString(),
+            worker: address,
+            signature,
+          };
+        } else if (isSurvey) {
           const answer = String(value).trim();
           if (!answer) throw new Error("Write an answer first");
           const signature = await signSurveyAnswer(
@@ -284,64 +351,70 @@ function Worker() {
   // --- task picker --------------------------------------------------------
 
   if (!task) {
+    const open = (tasks ?? []).filter(isOpen);
+    const inCategory = category
+      ? open.filter((t) => categoryOf(t) === category)
+      : [];
+
     return (
       <Shell>
-        <WalletBar address={address} email={user?.google?.email} />
-        <Earnings earned={earned} />
-
-        <div>
-          <h2 className="text-lg font-semibold">Open tasks</h2>
-          <p className="text-sm text-zinc-500">
-            Posted by requesters, stored on-chain.
-          </p>
-        </div>
+        <IdentityCard
+          address={address}
+          email={user?.google?.email}
+          balance={earned}
+          nfts={held.nfts}
+          available={open.length}
+          streak={streak}
+        />
 
         {tasks === null ? (
           <div className="text-zinc-600">Reading tasks from Monad…</div>
-        ) : tasks.length === 0 ? (
-          <div className="text-zinc-500">
-            Nothing posted yet.{" "}
-            <Link href="/post" className="text-emerald-500 underline">
-              Post the first one
-            </Link>
-            .
-          </div>
+        ) : category === null ? (
+          <>
+            <CategoryPicker tasks={open} onPick={setCategory} />
+            {open.length === 0 && (
+              <p className="text-sm text-zinc-500">
+                Nothing open right now.{" "}
+                <Link href="/post" className="text-emerald-500 underline">
+                  Post a task
+                </Link>{" "}
+                and it&apos;ll appear here instantly.
+              </p>
+            )}
+          </>
         ) : (
-          <div className="space-y-2.5">
-            {tasks.map((t) => {
-              const left = t.funded - t.paidOut;
-              const dry = left < t.rewardPerLabel;
-              return (
-                <button
-                  key={t.id}
-                  onClick={() => setTask(t)}
-                  disabled={!t.open || dry}
-                  className="w-full rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 text-left transition hover:border-zinc-700 active:scale-[0.99] disabled:opacity-40"
-                >
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="font-medium">{t.spec.title}</span>
-                    <span className="shrink-0 font-mono text-sm text-emerald-400">
-                      {money(t.rewardPerLabel)}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-sm text-zinc-500">{t.spec.question}</p>
-                  <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                    <ModeBadge task={t} />
-                    <span className="text-xs text-zinc-600">
-                      {t.itemCount} {t.mode === Mode.Survey ? "questions" : "items"}
-                    </span>
-                    <span className="text-xs text-zinc-600">·</span>
-                    <span className="text-xs text-zinc-600">{money(left)} left</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+          <>
+            <button
+              onClick={() => setCategory(null)}
+              className="self-start text-sm text-zinc-500"
+            >
+              ← Categories
+            </button>
+            <h2 className="text-lg font-semibold">
+              {category === "bbox" ? "Image bounties" : "Surveys"}
+            </h2>
+            <div className="space-y-2.5">
+              {inCategory.map((t) => (
+                <TaskRow key={t.id} task={t} onPick={() => setTask(t)} />
+              ))}
+            </div>
+          </>
         )}
 
         <Link href="/post" className="text-center text-sm text-zinc-500">
-          Post your own task →
+          Need something labelled? Post a task →
         </Link>
+
+        {alert && (
+          <BountyAlert
+            task={alert}
+            onTake={() => {
+              setTask(alert);
+              setAlert(null);
+            }}
+            onDismiss={() => setAlert(null)}
+          />
+        )}
         <Footer />
       </Shell>
     );
@@ -352,7 +425,8 @@ function Worker() {
   const item = queue?.[cursor];
   const total = queue?.length ?? 0;
   const isSurvey = task.mode === Mode.Survey;
-  const isImage = task.spec.kind === "image";
+  const isBox = task.spec.kind === "bbox";
+  const isImage = task.spec.kind === "image" || isBox;
   const upcoming = isImage ? (queue ?? []).slice(cursor + 1, cursor + 4) : [];
 
   return (
@@ -389,7 +463,15 @@ function Worker() {
         <div className="flex-1 flex flex-col justify-center gap-5">
           <p className="text-sm text-zinc-500">{task.spec.question}</p>
 
-          {isImage ? (
+          {isBox ? (
+            <BoxDrawer
+              key={item.id}
+              src={item.text}
+              box={box}
+              onChange={setBox}
+              disabled={busy}
+            />
+          ) : isImage ? (
             <ImageCard key={item.id} src={item.text} />
           ) : (
             <div
@@ -411,7 +493,28 @@ function Worker() {
             ))}
           </div>
 
-          {isSurvey ? (
+          {isBox ? (
+            <div className="space-y-3">
+              <button
+                onClick={() => submit(box)}
+                disabled={busy || !box}
+                className="w-full rounded-2xl bg-emerald-500 py-4 text-lg font-semibold text-zinc-950 disabled:opacity-40"
+              >
+                {busy ? "Signing…" : box ? "Claim bounty" : "Draw a box first"}
+              </button>
+              <button
+                onClick={() => submit(null)}
+                disabled={busy}
+                className="w-full rounded-xl border border-zinc-700 py-3 text-sm text-zinc-400 disabled:opacity-40"
+              >
+                Nothing here
+              </button>
+              <p className="text-center text-xs text-zinc-600">
+                {total - cursor} left · {money(task.rewardPerLabel)} each · first
+                to answer takes it
+              </p>
+            </div>
+          ) : isSurvey ? (
             <div className="space-y-3">
               <textarea
                 value={text}
