@@ -70,6 +70,7 @@ export const taskPoolAbi = parseAbi([
   "function surveyDigest(uint256 taskId, uint256 itemId, string answer) view returns (bytes32)",
   "function surveyResponse(uint256 taskId, bytes32 workerId) view returns (string[])",
   "function respondents(uint256 taskId) view returns (bytes32[])",
+  "function participants(uint256 taskId) view returns (bytes32[])",
   "function respondentCount(uint256 taskId) view returns (uint256)",
   "function answeredCount(uint256, bytes32) view returns (uint32)",
   "function surveyPaid(uint256, bytes32) view returns (bool)",

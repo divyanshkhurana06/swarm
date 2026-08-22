@@ -75,7 +75,6 @@ function Worker() {
   const [queue, setQueue] = useState<Item[] | null>(null);
   const [cursor, setCursor] = useState(0);
   const [earned, setEarned] = useState<bigint>(0n);
-  const [pendingVotes, setPendingVotes] = useState(0);
   const [text, setText] = useState("");
   const [box, setBox] = useState<Box | null>(null);
   const [pops, setPops] = useState<Pop[]>([]);
@@ -253,10 +252,8 @@ function Worker() {
           };
         }
 
-        // Majority holds the money until the crowd agrees, and a survey pays
-        // only on completion -- so don't pretend either has paid yet.
+        // A survey pays on completion, so don't claim money has landed yet.
         const paysNow = task.mode === Mode.FirstCome;
-        if (task.mode === Mode.Majority) setPendingVotes((p) => p + 1);
 
         const res = await fetch("/api/relay", {
           method: "POST",
@@ -267,11 +264,9 @@ function Worker() {
         if (!res.ok) throw new Error(json.error ?? "Submission failed");
 
         advance(reward, paysNow);
-        if (!paysNow) {
-          // Majority holds the money until the crowd agrees and a survey pays
-          // on completion, so "+$0.02" here would be a lie.
-          showPop(task.mode === Mode.Majority ? "locked in" : "saved");
-        }
+        // A survey is only paid once every question is answered, so showing an
+        // amount here would be a lie the contract contradicts a minute later.
+        if (!paysNow) showPop("saved");
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         if (/AlreadyLabeled/i.test(message)) {
@@ -448,7 +443,7 @@ function Worker() {
         </div>
       </div>
 
-      <Earnings earned={earned} pendingVotes={pendingVotes} bump={bump} />
+      <Earnings earned={earned} bump={bump} />
 
       {total > 0 && (
         <div className="h-1 w-full overflow-hidden rounded-full bg-zinc-900">
@@ -633,15 +628,7 @@ function ImageCard({ src }: { src: string }) {
   );
 }
 
-function Earnings({
-  earned,
-  pendingVotes,
-  bump,
-}: {
-  earned: bigint;
-  pendingVotes?: number;
-  bump?: number;
-}) {
+function Earnings({ earned, bump }: { earned: bigint; bump?: number }) {
   return (
     <div className="flex items-end justify-between">
       <div>
@@ -658,11 +645,6 @@ function Earnings({
         </div>
       </div>
       <div className="flex items-center gap-3">
-        {!!pendingVotes && (
-          <span className="text-xs text-amber-400">
-            {pendingVotes} awaiting the vote
-          </span>
-        )}
         {earned > 0n && (
           <Link
             href="/withdraw"
@@ -705,13 +687,11 @@ function Finished({
       </div>
 
       <p className="text-zinc-400">
-        {task.mode === Mode.Majority
-          ? "Your answers are in. Each one pays as soon as enough people have answered that item and the majority is settled."
-          : task.mode === Mode.Survey
-            ? survey?.paid
-              ? "You were paid for the whole response."
-              : "You've answered everything available on this one."
-            : `You've earned ${money(earned)} in total, already on-chain.`}
+        {task.mode === Mode.Survey
+          ? survey?.paid
+            ? "You were paid for the whole response."
+            : "You've answered everything available on this one."
+          : `You've earned ${money(earned)} in total, already on-chain.`}
       </p>
 
       <button
@@ -733,11 +713,8 @@ function Finished({
 }
 
 function ModeBadge({ task }: { task: Task }) {
-  if (task.mode === Mode.Majority) {
-    return <Badge tone="amber">majority of {task.quorum}</Badge>;
-  }
   if (task.mode === Mode.Survey) return <Badge tone="sky">survey</Badge>;
-  return <Badge tone="emerald">first come</Badge>;
+  return <Badge tone="emerald">bounty · first come</Badge>;
 }
 
 function Footer() {

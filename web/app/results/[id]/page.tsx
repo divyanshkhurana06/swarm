@@ -95,7 +95,7 @@ export default function Results({ params }: { params: Promise<{ id: string }> })
                 task: task.spec.title,
                 question: task.spec.question,
                 answers: task.spec.answers,
-                scoring: task.mode === Mode.Majority ? "majority" : "first-come",
+                scoring: "first-come bounty",
                 contract: TASK_POOL,
                 taskId,
                 items: rows.map((r) => ({
@@ -174,11 +174,11 @@ export default function Results({ params }: { params: Promise<{ id: string }> })
           <h1 className="text-2xl font-semibold tracking-tight">
             {task.spec.title}
           </h1>
-          {task.mode === Mode.Majority && (
-            <Badge tone="amber">majority of {task.quorum}</Badge>
+          {task.mode === Mode.Survey ? (
+            <Badge tone="sky">survey</Badge>
+          ) : (
+            <Badge tone="emerald">bounty · first come</Badge>
           )}
-          {task.mode === Mode.Survey && <Badge tone="sky">survey</Badge>}
-          {task.mode === Mode.FirstCome && <Badge tone="emerald">first come</Badge>}
         </div>
         <p className="mt-1 text-zinc-500">{task.spec.question}</p>
       </div>
@@ -205,11 +205,9 @@ export default function Results({ params }: { params: Promise<{ id: string }> })
       <p className="text-xs leading-relaxed text-zinc-600">
         {formatUnits(task.paidOut, DUSD_DECIMALS)} DUSD paid out across{" "}
         {task.answers} answers.{" "}
-        {task.mode === Mode.Majority
-          ? "Only workers who agreed with the majority were paid; the rest cost you nothing."
-          : task.mode === Mode.Survey
-            ? "Each response was paid for only once every question was answered."
-            : "Each answer was paid on arrival."}
+        {task.mode === Mode.Survey
+          ? "Each response was paid for only once every question was answered."
+          : "Each image was a bounty — paid to the first worker to answer it."}
       </p>
 
       {isSurvey ? (

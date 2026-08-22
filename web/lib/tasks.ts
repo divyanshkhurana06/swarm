@@ -233,9 +233,9 @@ export async function loadResults(task: Task) {
 
 /** Every box drawn on a bounty task, for review and export. */
 export async function loadBoxes(task: Task) {
-  // Anyone who answered an item is a worker on this task; boxes are keyed by
-  // worker, so collect the ids from the completion receipts we know about.
-  const ids = await read<readonly Hex[]>("respondents", [BigInt(task.id)]).catch(
+  // `respondents` means "completed the survey" -- the wrong list here, since a
+  // bounty worker who boxed one image never completes anything.
+  const ids = await read<readonly Hex[]>("participants", [BigInt(task.id)]).catch(
     () => [] as readonly Hex[]
   );
   if (ids.length === 0) return [];

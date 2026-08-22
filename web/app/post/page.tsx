@@ -14,12 +14,10 @@ import { Shell, Field, Input, WalletBar } from "@/components/ui";
 /**
  * Requester side.
  *
- * Three kinds of work, three ways of deciding who gets paid, because they are
- * genuinely different problems:
+ * Two kinds of work, two ways of deciding who gets paid:
  *
- *   Images   objective, fast, first come first served
- *   Text     judgement calls, scored by majority so guessing does not pay
- *   Survey   long-form, paid only when the whole response is finished
+ *   Bounty   upload photos, workers box the target, first to answer takes it
+ *   Survey   long-form answers, paid only when the whole response is finished
  */
 
 type Kind = "bbox" | "survey";
