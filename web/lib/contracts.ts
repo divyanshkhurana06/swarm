@@ -65,6 +65,7 @@ export const taskPoolAbi = parseAbi([
   "function totalLabels() view returns (uint256)",
   "function totalPaid() view returns (uint256)",
   "function workerCount() view returns (uint256)",
+  "function taskCount() view returns (uint256)",
   "function tasks(uint256) view returns (Task)",
   "function remaining(uint256) view returns (uint256)",
   "function idOf(PubKey pk) pure returns (bytes32)",

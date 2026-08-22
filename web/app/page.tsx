@@ -74,7 +74,14 @@ function Worker() {
   const workerId = address ? workerIdOfAddress(address) : undefined;
 
   useEffect(() => {
-    loadTasks().then(setTasks).catch(() => setError("Could not load tasks"));
+    loadTasks()
+      .then(setTasks)
+      .catch((e) => {
+        console.error("loadTasks failed:", e);
+        setError(
+          `Could not load tasks: ${e instanceof Error ? e.message.split("\n")[0] : e}`
+        );
+      });
   }, []);
 
   // Only offer items this worker hasn't answered: the contract allows one
