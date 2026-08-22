@@ -46,6 +46,14 @@ export const taskPoolAbi = parseAbi([
   "function submitLabelFor(uint256 taskId, uint256 itemId, uint8 answer, address worker, bytes signature)",
   "function withdrawFor(address worker, address to, bytes signature) returns (uint256)",
   "function idOfAddress(address worker) pure returns (bytes32)",
+
+  // Requester side. Task specs live on-chain, so a worker needs no backend.
+  "function postTaskSponsored(string spec, uint96 rewardPerLabel, uint128 amount, uint32 items, address requester, bytes signature) returns (uint256)",
+  "function postDigest(string spec, uint96 rewardPerLabel, uint128 amount, uint32 items) view returns (bytes32)",
+  "function taskSpec(uint256) view returns (string)",
+  "function itemCount(uint256) view returns (uint32)",
+  "function tally(uint256, uint256, uint8) view returns (uint32)",
+  "function results(uint256 taskId) view returns (uint32[] zeros, uint32[] ones)",
   "function labelDigest(uint256 taskId, uint256 itemId, uint8 answer) view returns (bytes32)",
   "function withdrawDigest(address worker, address to) view returns (bytes32)",
 

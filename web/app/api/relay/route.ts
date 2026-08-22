@@ -104,6 +104,32 @@ export async function POST(req: Request) {
         break;
       }
 
+      case "postTask": {
+        const { spec, rewardPerLabel, amount, items, requester, signature } =
+          body as unknown as {
+            spec: string;
+            rewardPerLabel: string;
+            amount: string;
+            items: number;
+            requester: Hex;
+            signature: Hex;
+          };
+        hash = await wallet.writeContract({
+          address: TASK_POOL,
+          abi: taskPoolAbi,
+          functionName: "postTaskSponsored",
+          args: [
+            spec,
+            BigInt(rewardPerLabel),
+            BigInt(amount),
+            Number(items),
+            requester,
+            signature,
+          ],
+        });
+        break;
+      }
+
       case "labelFor": {
         const { taskId, itemId, answer, worker, signature } = body as unknown as {
           taskId: string;

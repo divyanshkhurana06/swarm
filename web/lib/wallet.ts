@@ -23,6 +23,12 @@ const domain = {
 } as const;
 
 const types = {
+  PostTask: [
+    { name: "spec", type: "string" },
+    { name: "rewardPerLabel", type: "uint96" },
+    { name: "amount", type: "uint128" },
+    { name: "items", type: "uint32" },
+  ],
   Label: [
     { name: "taskId", type: "uint256" },
     { name: "itemId", type: "uint256" },
@@ -44,7 +50,7 @@ export type SigningWallet = {
 
 async function signTypedData(
   wallet: SigningWallet,
-  primaryType: "Label" | "Withdraw",
+  primaryType: "Label" | "Withdraw" | "PostTask",
   message: Record<string, string>
 ): Promise<Hex> {
   const provider = await wallet.getEthereumProvider();
@@ -83,6 +89,21 @@ export function signLabel(
     taskId: taskId.toString(),
     itemId: itemId.toString(),
     answer: answer.toString(),
+  });
+}
+
+export function signPostTask(
+  wallet: SigningWallet,
+  spec: string,
+  rewardPerLabel: bigint,
+  amount: bigint,
+  items: number
+): Promise<Hex> {
+  return signTypedData(wallet, "PostTask", {
+    spec,
+    rewardPerLabel: rewardPerLabel.toString(),
+    amount: amount.toString(),
+    items: items.toString(),
   });
 }
 

@@ -1,16 +1,16 @@
 # Swarm
 
-**Get paid a fraction of a cent for a few seconds of work — instantly, on-chain, with no wallet and no signup.**
+**A data-labelling market where every answer is paid the moment it is given — on-chain, for a fraction of a cent, with no wallet and no signup on either side.**
 
-A worker opens a link, taps Face ID, and starts answering. Every answer is a transaction. Every transaction pays out immediately. There is no app to install, no seed phrase, no account.
+A requester pastes what they need labelled and signs once. The task goes on-chain. A worker signs in with Google, answers, and is paid per answer. Neither side needs gas, tokens, or a seed phrase.
 
 Built at [Monad Blitz Hyderabad V3](https://blitz.devnads.com/events/monad-blitz-hyderabad-v3).
 
 - **Live demo:** _TODO — add the deployed URL_
 - **Projector dashboard:** _TODO — `<url>/dashboard`_
-- **TaskPool (Monad Testnet):** [`0x016c11ef8e95D4FB01d7dA779EDb1e3A47CC718C`](https://testnet.monadvision.com/address/0x016c11ef8e95D4FB01d7dA779EDb1e3A47CC718C) — verified
-- **DemoUSD (Monad Testnet):** [`0x40E66E2Dc9eF2A05Ed7025e4BA6e6f3412DA7d47`](https://testnet.monadvision.com/address/0x40E66E2Dc9eF2A05Ed7025e4BA6e6f3412DA7d47) — verified
-- **WorkReceipt NFT (Monad Testnet):** [`0x4AeB50C5426AB43Df64ac584fB70572aDDf32452`](https://testnet.monadvision.com/address/0x4AeB50C5426AB43Df64ac584fB70572aDDf32452) — verified
+- **TaskPool (Monad Testnet):** [`0x73c6024536889545115325872AeAeC4fCf03c78E`](https://testnet.monadvision.com/address/0x73c6024536889545115325872AeAeC4fCf03c78E) — verified
+- **DemoUSD (Monad Testnet):** [`0x0B9773Ca827eb1E8D8d7AC07adDcdC090EC4b3B0`](https://testnet.monadvision.com/address/0x0B9773Ca827eb1E8D8d7AC07adDcdC090EC4b3B0) — verified
+- **WorkReceipt NFT (Monad Testnet):** [`0x5E36430535702e75795a105576B058265e131af0`](https://testnet.monadvision.com/address/0x5E36430535702e75795a105576B058265e131af0) — verified
 - **Task id:** `0` · **Reward:** 0.005 DUSD (half a cent) per answer
 
 ---
@@ -27,6 +27,20 @@ That primitive did not exist before cheap on-chain P256 verification, for two re
 
 A full passkey-authorised, paid-out answer costs **205,659 gas** on Monad testnet — measured end to end by `scripts/e2e-onchain.ts` against the deployed contracts, not estimated. (The local Foundry measurement is 156k; the real chain is higher because storage slots start cold.) At 102 gwei that is about 0.021 MON per answer.
 
+## The two sides
+
+| | |
+|---|---|
+| `/post` | A requester writes a question, pastes items one per line, sets what an answer is worth, and signs. No gas, no tokens. |
+| `/` | A worker signs in with Google, picks a task, and answers. Paid per answer, immediately. |
+| `/results/[id]` | The dataset: every item, the crowd's answer, and how much of the crowd agreed. Downloadable as JSON or CSV. |
+| `/withdraw` | Cash out to any address. Mints a receipt NFT. |
+| `/dashboard` | The projector wall — live payouts as they are mined. |
+
+**Task specs live on-chain.** A requester posts and a worker anywhere sees it with no server, no database, and nothing that has to still be running tomorrow. Results are read from contract state rather than reconstructed from events, because the public RPC caps `eth_getLogs` at a 100-block range — which makes event-scraping a dataset unreliable exactly when it matters.
+
+**Agreement is reported, not hidden.** Several workers answer each item independently. Where they disagree the item was ambiguous, and the export says so rather than flattening it into a single confident label.
+
 ## How it works
 
 ```
@@ -38,7 +52,8 @@ A full passkey-authorised, paid-out answer costs **205,659 gas** on Monad testne
                                                         credits the worker
 ```
 
-- **Registration.** `navigator.credentials.create()` makes a P256 keypair inside the phone's secure enclave. The public key becomes the worker's identity (`workerId = keccak256(x, y)`). The private key physically cannot leave the device; Face ID only unlocks permission to use it.
+- **Two ways to be a person.** Google sign-in with a Privy embedded wallet signs EIP-712 typed data (`submitLabelFor`); a passkey signs a WebAuthn assertion verified against Monad's P256 precompile (`submitLabel`). Both share one ledger — earnings, the cash-out floor and the receipt NFT do not care which was used. An address-derived worker id occupies the low 160 bits, so it can never collide with a passkey id, which is `keccak256` of a public key.
+- **Registration (passkey path).** `navigator.credentials.create()` makes a P256 keypair inside the phone's secure enclave. The public key becomes the worker's identity (`workerId = keccak256(x, y)`). The private key physically cannot leave the device; Face ID only unlocks permission to use it.
 - **Recovery.** Registration also records `keccak256(credentialId) => workerId` on-chain. A WebAuthn assertion returns the credential id but never the public key, so without that mapping a worker who cleared their browser — or opened the site on a second device — would be unable to derive their own identity and would be silently orphaned from money they had already earned. With it, signing in with the passkey recovers the account from the chain. Browser storage is a cache, not the source of truth.
 - **Every answer.** The intent (`taskId`, `itemId`, `answer`) is hashed into the WebAuthn challenge. The contract recomputes that challenge and rejects anything else — so a signature for "yes" is not a signature for "no", and a captured signature cannot be replayed against another action, contract, or chain.
 - **Gas.** Workers hold no MON, so a relayer submits their signed payloads and pays. This is safe because the *contract* verifies the worker's signature: the relayer cannot forge an answer, redirect a payout, or touch a balance. The worst it can do is refuse to deliver.
@@ -53,14 +68,17 @@ contracts/
   src/TaskPool.sol      task pools, the worker ledger, payouts
   src/DemoUSD.sol       6-decimal stand-in stablecoin for testnet
   src/WorkReceipt.sol   cash-out receipt NFT, artwork generated on-chain
+  src/EIP712.sol        typed-data signing for embedded wallets
   src/Base64.sol        encoder for the NFT's inline metadata
-  test/TaskPool.t.sol   15 tests against real P256 signatures
+  test/TaskPool.t.sol   24 tests, real P256 and secp256k1 signatures
   script/webauthn.js    generates real WebAuthn assertions for those tests
   script/Deploy.s.sol   deploys and seeds a funded task
 web/
   lib/passkey.ts        WebAuthn client: DER parsing, low-s, challenge encoding
   lib/contracts.ts      chain config and ABI
   app/page.tsx          the worker app
+  app/post/page.tsx      requester: post a task
+  app/results/[id]       the labelled dataset, JSON/CSV export
   app/withdraw/page.tsx  cash out to any address
   app/dashboard/page.tsx the projector wall
   app/api/relay/route.ts the gas relayer
@@ -100,6 +118,11 @@ forge verify-contract <TASK_POOL_ADDRESS> src/TaskPool.sol:TaskPool \
   --chain 10143 --verifier sourcify
 ```
 
+You will also need a [Privy](https://dashboard.privy.io) app id: create an app,
+enable Google as a login method, and turn on automatic embedded wallet creation
+for EVM. Add every domain you serve from to Privy's allowed origins, or the
+login popup closes silently with no error.
+
 ### 2. Web app
 
 ```bash
@@ -118,7 +141,7 @@ Open `http://localhost:3000` on a phone with Face ID or a fingerprint reader, an
 ### 3. Tests
 
 ```bash
-cd contracts && forge test --odyssey -vv    # 15 contract tests, local
+cd contracts && forge test --odyssey -vv    # 24 contract tests, local
 cd web && npm test                          # DER parser + challenge encoding
 cd web && npx tsx scripts/e2e-onchain.ts    # full flow against deployed contracts
 ```

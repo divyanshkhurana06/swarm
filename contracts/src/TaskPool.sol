@@ -5,6 +5,10 @@ import {WebAuthn} from "./WebAuthn.sol";
 import {EIP712} from "./EIP712.sol";
 import {WorkReceipt} from "./WorkReceipt.sol";
 
+interface IMintable {
+    function mint(address to, uint256 amount) external;
+}
+
 interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
@@ -44,6 +48,25 @@ contract TaskPool {
 
     /// @notice Off-chain manifest of the items to be labelled, per task.
     mapping(uint256 taskId => string uri) public taskURI;
+
+    /// @notice The task itself -- question, answer labels and every item --
+    ///         stored as JSON on-chain.
+    /// @dev A requester posts a task and a worker on the other side of the
+    ///      world can see it with no server, no database and nothing to keep
+    ///      running. Expensive per byte, and the right trade for a market that
+    ///      would otherwise need a backend everyone has to trust.
+    mapping(uint256 taskId => string) public taskSpec;
+
+    /// @notice How many items a task contains, so results can be read back
+    ///         without parsing the spec on-chain.
+    mapping(uint256 taskId => uint32) public itemCount;
+
+    /// @notice answers[taskId][itemId][answer] -- the labelled dataset itself.
+    /// @dev Kept as a tally rather than reconstructed from events because the
+    ///      public RPC caps eth_getLogs at a 100-block range, which makes
+    ///      event-scraping a dataset unreliable the moment it matters.
+    mapping(uint256 taskId => mapping(uint256 itemId => mapping(uint8 answer => uint32)))
+        public tally;
 
     /// @notice Registered passkeys. `workerId` is keccak256(pubkey.x, pubkey.y).
     mapping(bytes32 workerId => WebAuthn.PubKey) private _pubkeys;
@@ -151,6 +174,82 @@ contract TaskPool {
         emit TaskCreated(taskId, msg.sender, uri, rewardPerLabel, amount);
     }
 
+    bytes32 private constant POST_TYPEHASH =
+        keccak256("PostTask(string spec,uint96 rewardPerLabel,uint128 amount,uint32 items)");
+
+    function postDigest(
+        string calldata spec,
+        uint96 rewardPerLabel,
+        uint128 amount,
+        uint32 items
+    ) public view returns (bytes32) {
+        return EIP712.digest(
+            domainSeparator(),
+            keccak256(
+                abi.encode(POST_TYPEHASH, keccak256(bytes(spec)), rewardPerLabel, amount, items)
+            )
+        );
+    }
+
+    /// @notice Post a task without holding gas or tokens.
+    ///
+    /// @dev A requester signs the task and a relayer submits it, so somebody
+    ///      posting their first job never has to acquire MON first -- the same
+    ///      argument that applies to workers.
+    ///
+    ///      TESTNET ONLY: the reward pool is minted rather than pulled from the
+    ///      requester, because making them fund and approve a stablecoin
+    ///      defeats the point of the demo. On mainnet this is `createTask`,
+    ///      which pulls real USDC via transferFrom and is otherwise identical.
+    function postTaskSponsored(
+        string calldata spec,
+        uint96 rewardPerLabel,
+        uint128 amount,
+        uint32 items,
+        address requester,
+        bytes calldata signature
+    ) external returns (uint256 taskId) {
+        if (rewardPerLabel == 0) revert ZeroReward();
+        if (EIP712.recover(postDigest(spec, rewardPerLabel, amount, items), signature) != requester)
+        {
+            revert BadSignature();
+        }
+
+        taskId = _tasks.length;
+        _tasks.push(
+            Task({
+                requester: requester,
+                rewardPerLabel: rewardPerLabel,
+                funded: amount,
+                paidOut: 0,
+                labelCount: 0,
+                open: true
+            })
+        );
+        taskSpec[taskId] = spec;
+        itemCount[taskId] = items;
+
+        IMintable(address(token)).mint(address(this), amount);
+        emit TaskCreated(taskId, requester, "", rewardPerLabel, amount);
+    }
+
+    /// @notice The labelled dataset: how many workers chose each answer.
+    /// @dev Returned as parallel arrays so a client can export the whole set
+    ///      in one call rather than scraping logs.
+    function results(uint256 taskId)
+        external
+        view
+        returns (uint32[] memory zeros, uint32[] memory ones)
+    {
+        uint256 n = itemCount[taskId];
+        zeros = new uint32[](n);
+        ones = new uint32[](n);
+        for (uint256 i = 0; i < n; i++) {
+            zeros[i] = tally[taskId][i][0];
+            ones[i] = tally[taskId][i][1];
+        }
+    }
+
     /// @notice Top up a task that is running dry mid-demo.
     function fundTask(uint256 taskId, uint128 amount) external {
         Task storage t = _tasks[taskId];
@@ -245,6 +344,7 @@ contract TaskPool {
         if (t.funded - t.paidOut < reward) revert PoolExhausted();
 
         hasLabeled[taskId][workerId][itemId] = true;
+        tally[taskId][itemId][answer]++;
         t.paidOut += uint128(reward);
         t.labelCount++;
         earned[workerId] += reward;

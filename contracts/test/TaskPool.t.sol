@@ -221,6 +221,57 @@ contract TaskPoolTest is Test {
     }
 
     // ---------------------------------------------------------------------
+    // Requester side: post a task, read the dataset back out
+    // ---------------------------------------------------------------------
+
+    string internal constant SPEC =
+        '{"title":"Sentiment","question":"Positive?","answers":{"0":"No","1":"Yes"},"items":[{"id":0,"text":"great"},{"id":1,"text":"awful"}]}';
+
+    function _postTask(uint128 amount, uint32 items) internal returns (uint256) {
+        address poster = vm.addr(WALLET_PK);
+        bytes32 d = pool.postDigest(SPEC, REWARD, amount, items);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(WALLET_PK, d);
+        return pool.postTaskSponsored(SPEC, REWARD, amount, items, poster, abi.encodePacked(r, s, v));
+    }
+
+    function test_PostTask_IsVisibleOnChain() public {
+        uint256 id = _postTask(1_000_000, 2);
+
+        // A worker anywhere can read the whole task off the chain -- no server
+        // in the middle, nothing to keep running.
+        assertEq(pool.taskSpec(id), SPEC, "spec is readable on-chain");
+        assertEq(pool.itemCount(id), 2);
+        assertEq(pool.tasks(id).requester, vm.addr(WALLET_PK));
+        assertEq(pool.remaining(id), 1_000_000, "pool funded on creation");
+    }
+
+    function test_PostTask_RevertWhen_SignatureIsFromSomeoneElse() public {
+        bytes32 d = pool.postDigest(SPEC, REWARD, 1_000_000, 2);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(0xB0B, d);
+
+        vm.expectRevert(TaskPool.BadSignature.selector);
+        pool.postTaskSponsored(SPEC, REWARD, 1_000_000, 2, vm.addr(WALLET_PK), abi.encodePacked(r, s, v));
+    }
+
+    function test_Results_AreTheLabelledDataset() public {
+        uint256 id = _postTask(1_000_000, 2);
+        address wallet = vm.addr(WALLET_PK);
+
+        // Two workers disagree on item 0 and agree on item 1.
+        pool.submitLabelFor(id, 0, 1, wallet, _signEoa(pool.labelDigest(id, 0, 1)));
+        pool.submitLabelFor(id, 1, 0, wallet, _signEoa(pool.labelDigest(id, 1, 0)));
+
+        WebAuthn.Signature memory sig = _sign(pool.labelChallenge(id, 0, 0));
+        pool.submitLabel(id, 0, 0, workerId, sig);
+
+        (uint32[] memory zeros, uint32[] memory ones) = pool.results(id);
+        assertEq(zeros[0], 1, "one worker said no on item 0");
+        assertEq(ones[0], 1, "one worker said yes on item 0");
+        assertEq(zeros[1], 1, "item 1 answered once");
+        assertEq(ones[1], 0);
+    }
+
+    // ---------------------------------------------------------------------
     // The security properties that actually matter
     // ---------------------------------------------------------------------
 
