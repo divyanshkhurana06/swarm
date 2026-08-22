@@ -240,11 +240,5 @@ The contract tests do not mock the signature layer. `script/webauthn.js` builds 
 
 ---
 
-## Security notes
-
-- **Challenges are bound** to chain id, contract address, an action tag, and every parameter of the action. Nothing is replayable across actions, deployments, or chains.
-- **Low-s is enforced.** `(r, s)` and `(r, n−s)` are both valid ECDSA signatures for the same message; the contract rejects the high variant so one authorisation cannot be presented twice looking different.
-- **The challenge is located in `clientDataJSON` by byte offset**, and the preceding `"challenge":"` key is checked, so a matching string cannot be smuggled in via `origin` or any other field.
-- **The relayer is untrusted by design.** It pays gas and nothing else.
 
 
