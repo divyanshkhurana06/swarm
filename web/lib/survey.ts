@@ -98,18 +98,28 @@ export function splitIntoQuestions(text: string): Question[] {
   };
 
   if (numbered >= 2 || bulleted >= 2) {
-    // The document numbers its questions, so a marker starts a new one and
-    // everything until the next marker belongs to it.
+    // The document numbers its questions, so a marker starts a new one. An
+    // unmarked line is either the rest of a wrapped question or page
+    // furniture, and the difference matters: headers and instructions are
+    // routinely interleaved between numbered questions, not just at the top.
     for (const line of lines) {
       const isMarker = NUMBERED.test(line) || BULLET.test(line);
+
       if (isMarker) {
         flush();
         buffer = line.replace(NUMBERED, "").replace(BULLET, "");
-      } else if (buffer) {
-        buffer += " " + line;
-      } else {
-        // Preamble before the first question -- a title, a heading. Skip it.
+        continue;
       }
+
+      // Nothing open yet: this is a title or preamble.
+      if (!buffer) continue;
+
+      // The open question already ended. A wrapped question does not stop
+      // mid-sentence at a question mark, so whatever this is -- a section
+      // title, an instruction, a page footer -- it is not part of it.
+      if (/[?!.:]$/.test(buffer)) continue;
+
+      buffer += " " + line;
     }
     flush();
   } else if (text.includes("?")) {

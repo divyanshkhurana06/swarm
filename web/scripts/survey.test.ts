@@ -79,6 +79,32 @@ Explain what you would change first.`), [
   "Explain what you would change first.",
 ]);
 
+// 8. A real document: a header and instructions sitting between questions,
+// not just at the top. This is what actually broke.
+check("headers interleaved between questions are not swallowed", split(`1. What is your age?
+    2. What is your current occupation or role?
+3. How satisfied are you with your current daily routine?
+9. What is one feature you value most in a product or service?
+Basic Survey
+Please answer briefly. There are no right or wrong answers.
+
+    10. Any other feedback or suggestion you would like to share?`), [
+  "What is your age?",
+  "What is your current occupation or role?",
+  "How satisfied are you with your current daily routine?",
+  "What is one feature you value most in a product or service?",
+  "Any other feedback or suggestion you would like to share?",
+]);
+
+// 9. But a genuinely wrapped question must still join, which is the constraint
+// that makes this hard: both look like an unmarked line after a numbered one.
+check("a wrap still joins even with a header rule in place", split(`1. What made you choose this product over
+the alternatives you were considering?
+2. How often do you use it?`), [
+  "What made you choose this product over the alternatives you were considering?",
+  "How often do you use it?",
+]);
+
 const warn = ["Section 3 continued", "Page 4 of 9"].filter(looksLikeQuestion);
 console.log(`  ${warn.length === 0 ? "ok  " : "FAIL"} boilerplate is flagged, not silently posted`);
 if (warn.length) failed++;
