@@ -6,26 +6,54 @@ A requester pastes what they need labelled and signs once. The task goes on-chai
 
 Built at [Monad Blitz Hyderabad V3](https://blitz.devnads.com/events/monad-blitz-hyderabad-v3).
 
-- **Live demo:** _TODO — add the deployed URL_
-- **Projector dashboard:** _TODO — `<url>/dashboard`_
+- **Live app:** **https://swarm-rouge-one.vercel.app**
+- **Post a task:** https://swarm-rouge-one.vercel.app/post
+- **Projector dashboard:** https://swarm-rouge-one.vercel.app/dashboard
 - **TaskPool (Monad Testnet):** [`0x74F2b1C5eCb400c31596dC5CA993f909F083A6d0`](https://testnet.monadvision.com/address/0x74F2b1C5eCb400c31596dC5CA993f909F083A6d0) — verified
 - **DemoUSD (Monad Testnet):** [`0x5E47E70679811F5720338237066e3e57D71a449C`](https://testnet.monadvision.com/address/0x5E47E70679811F5720338237066e3e57D71a449C) — verified
 - **WorkReceipt NFT (Monad Testnet):** [`0xE2cBB61a976294a31756D0483e00dDbDf6A041c0`](https://testnet.monadvision.com/address/0xE2cBB61a976294a31756D0483e00dDbDf6A041c0) — verified
-- **Task id:** `0` · **Reward:** 0.005 DUSD (half a cent) per answer
+- **Rewards:** 5c per image bounty · 15c per survey question
+
+---
+
+## Verify it in two minutes
+
+| Claim | Where to check |
+|---|---|
+| Public repo | https://github.com/divyanshkhurana06/swarm |
+| Live, publicly hosted | https://swarm-rouge-one.vercel.app |
+| Contracts on Monad Testnet | [TaskPool `0x74F2…A6d0`](https://testnet.monadvision.com/address/0x74F2b1C5eCb400c31596dC5CA993f909F083A6d0) |
+| Source verified on the explorer | All three contracts, via Sourcify — open any address above |
+| Anyone can run it unaided | [Run it yourself](#run-it-yourself): clone, `forge test --odyssey`, `npm run dev` |
+| It works | 51 contract tests · 1593 client checks · three suites run against the **deployed** contracts |
+
+```bash
+npx tsx scripts/e2e-bounty.ts   # boxes stored, bounty raced, receipt minted
+npx tsx scripts/e2e-modes.ts    # each task mode pays the right people
+npx tsx scripts/e2e-onchain.ts  # passkey path, P256 precompile, withdrawal
+```
+
+Those matter more than the unit tests: they prove the browser's encoding, the
+relayer's calldata and the contract's accounting agree on the real chain.
+Several bugs were only ever caught there — a missing ABI entry that made the
+task list silently appear empty, and a signature that failed because Solidity
+pads array elements to 32 bytes while the client did not.
 
 ---
 
 ## What this actually is
 
-The labelling task on screen is the demo, not the product. The product is the **payment rail underneath it**: a way to pay anyone in the world a fraction of a cent, instantly, authorised by a fingerprint, with no account.
+The labelling task on screen is the demo, not the product. The product is the **payment rail underneath it**: a way to pay anyone in the world a few cents, the instant they earn it, with no account and no wallet to install.
 
-That primitive did not exist before cheap on-chain P256 verification, for two reasons:
+Two things make that possible here:
 
-1. **Passkeys sign on the wrong curve.** Ethereum accounts use secp256k1. Passkeys — Face ID, Touch ID, Android Keystore — use secp256r1 (P256). A pure-Solidity P256 verifier costs ~300,000 gas, so verifying a passkey per action was economically absurd. **Monad verifies P256 in a native precompile at `0x0100` for 6,900 gas** ([EIP-7951](https://docs.monad.xyz/developer-essentials/precompiles)), a ~40x reduction. That is what turns passkeys from a login gimmick into per-action authorisation.
+1. **Sub-cent settlement needs sub-cent fees.** Paying someone five cents is nonsense if the transfer costs two dollars. Every existing micro-work platform works around it the same way: batch the work, pay on Friday, through a middleman taking a large cut. Per-answer settlement is the thing that stops being absurd on Monad, and it is why a worker here is paid before they have finished reading the next question.
 
-2. **Sub-cent payments need sub-cent fees.** Paying someone $0.005 is nonsense if the transfer costs $2. Every existing micro-work platform batches instead: work all week, get paid Friday, through a middleman taking a large cut.
+2. **A worker should not need a wallet to earn.** Google sign-in creates an embedded wallet; the worker signs each answer, a relayer pays the gas, and the contract verifies the worker's signature — so the relayer can pay for everything without being able to forge anything.
 
-A full passkey-authorised, paid-out answer costs **205,659 gas** on Monad testnet — measured end to end by `scripts/e2e-onchain.ts` against the deployed contracts, not estimated. (The local Foundry measurement is 156k; the real chain is higher because storage slots start cold.) At 102 gwei that is about 0.021 MON per answer.
+There is also a second, fully-tested authentication path that verifies **passkeys** — Face ID, Touch ID — directly on-chain. Passkeys sign over secp256r1, which the EVM cannot verify natively; a Solidity verifier costs ~300,000 gas. **Monad verifies it in a precompile at `0x0100` for 6,900 gas** ([EIP-7951](https://docs.monad.xyz/developer-essentials/precompiles)), which is what turns "sign in with Face ID" into "authorise every single action with Face ID". Google is the default because it is the smoother demo; the passkey path is the more interesting engineering.
+
+A full passkey-authorised, paid-out answer costs **~206,000 gas** on Monad testnet — measured end to end by `scripts/e2e-onchain.ts` against the deployed contracts, not estimated. (The local Foundry measurement is 156k; the real chain is higher because storage slots start cold.) At 102 gwei that is about 0.021 MON per answer.
 
 ## Two kinds of work, two ways of paying
 
@@ -135,12 +163,16 @@ web/
 - Node 20+
 - A funded Monad Testnet key — get MON from [faucet.monad.xyz](https://faucet.monad.xyz)
 
+```bash
+git clone --recurse-submodules https://github.com/divyanshkhurana06/swarm.git
+cd swarm
+```
+
 ### 1. Contracts
 
 ```bash
 cd contracts
-forge install
-forge test --odyssey -vv
+forge test --odyssey -vv     # 51 tests, no setup beyond the clone
 ```
 
 `--odyssey` enables the P256 precompile at `0x0100` in the local EVM. Without it, every signature check fails — the precompile simply isn't there.
@@ -156,7 +188,8 @@ The script prints the `TaskPool` and `DemoUSD` addresses and the seeded task id.
 
 ```bash
 forge verify-contract <TASK_POOL_ADDRESS> src/TaskPool.sol:TaskPool \
-  --chain 10143 --verifier sourcify
+  --chain 10143 --verifier sourcify \
+  --verifier-url https://sourcify-api-monad.blockvision.org/
 ```
 
 You will also need a [Privy](https://dashboard.privy.io) app id: create an app,
@@ -173,7 +206,11 @@ cp .env.example .env.local     # then paste in the addresses from step 1
 npm run dev
 ```
 
-`RELAYER_PRIVATE_KEY` needs testnet MON — it pays gas for every worker. At ~156k gas per answer, budget accordingly if a whole room is going to use it.
+`RELAYER_PRIVATE_KEY` needs testnet MON — it pays gas for every worker, so it
+is the one thing that stops the whole app if it empties. Note the missing
+`NEXT_PUBLIC_` prefix: that prefix inlines a value into the browser bundle, and
+on a private key it would hand the wallet to every visitor. The app refuses to
+build if it finds one.
 
 Open `http://localhost:3000` on a phone with Face ID or a fingerprint reader, and `http://localhost:3000/dashboard` on the big screen.
 
