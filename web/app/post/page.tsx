@@ -8,7 +8,14 @@ import { DUSD_DECIMALS, explorerTx } from "@/lib/contracts";
 import { signPostTask, type SigningWallet } from "@/lib/wallet";
 import { publicClient, tasksBy, type Task } from "@/lib/tasks";
 import { extractPdfText, looksLikeQuestion, splitIntoQuestions } from "@/lib/survey";
-import { prepareImage, pdfToImages, estimateGas, MAX_BYTES_PER_IMAGE } from "@/lib/images";
+import {
+  prepareImage,
+  pdfToImages,
+  sliceIntoTiles,
+  imageSize,
+  estimateGas,
+  MAX_BYTES_PER_IMAGE,
+} from "@/lib/images";
 import { Shell, Field, Input, WalletBar } from "@/components/ui";
 
 /**
@@ -107,6 +114,12 @@ function PostTask() {
   const [uploaded, setUploaded] = useState<{ dataUri: string; name: string }[]>(
     []
   );
+  // A contact sheet is many jobs in one file; only the requester knows the
+  // layout, and guessing it wrong wastes their escrow.
+  const [grid, setGrid] = useState<{ cols: number; rows: number }>({
+    cols: 1,
+    rows: 1,
+  });
   const fileRef = useRef<HTMLInputElement>(null);
 
   // A requester who cannot find the answers they paid for has bought nothing.
@@ -165,10 +178,20 @@ function PostTask() {
 
       // Flatten a PDF into its pages first, so one file can seed a whole batch.
       const expanded: { dataUri: string; bytes: number; name: string }[] = [];
+      const split = grid.cols > 1 || grid.rows > 1;
+
       for (const f of files) {
         if (f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf")) {
-          expanded.push(...(await pdfToImages(f)));
+          expanded.push(...(await pdfToImages(f, grid)));
+        } else if (split) {
+          expanded.push(...(await sliceIntoTiles(f, grid.cols, grid.rows)));
         } else {
+          const size = await imageSize(f);
+          if (Math.max(size.width, size.height) > 1000) {
+            setError(
+              `${f.name} is ${size.width}x${size.height} — if it's a sheet of photos, pick a grid above so each one becomes its own bounty.`
+            );
+          }
           expanded.push(await prepareImage(f));
         }
       }
@@ -462,6 +485,32 @@ function PostTask() {
               ))}
             </div>
           )}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-zinc-500">Sheet of photos? Split into</span>
+            {[
+              { cols: 1, rows: 1, label: "one" },
+              { cols: 2, rows: 2, label: "2×2" },
+              { cols: 3, rows: 3, label: "3×3" },
+              { cols: 4, rows: 4, label: "4×4" },
+            ].map((g) => (
+              <button
+                key={g.label}
+                onClick={() => setGrid({ cols: g.cols, rows: g.rows })}
+                className={`rounded-lg px-2.5 py-1 text-xs transition ${
+                  grid.cols === g.cols && grid.rows === g.rows
+                    ? "bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40"
+                    : "border border-zinc-800 text-zinc-500"
+                }`}
+              >
+                {g.label}
+              </button>
+            ))}
+            {grid.cols > 1 && (
+              <span className="text-xs text-zinc-600">
+                = {grid.cols * grid.rows} bounties per image
+              </span>
+            )}
+          </div>
           <input
             ref={fileRef}
             type="file"

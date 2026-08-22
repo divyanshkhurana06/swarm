@@ -75,6 +75,13 @@ there is no backend to keep them in. That is visibly lossy and correct for "is
 there a car in this"; a real deployment would keep the original behind a URL and
 put only the pointer on-chain.
 
+A contact sheet — one page holding twenty photos — is many jobs in one file, so
+the upload form offers a grid split. Each cell becomes its own bounty at working
+resolution. Stored whole, the sheet would be crushed to the point where no cell
+is boxable, and it would still pay only once, so nineteen of the photos would
+ride free on the twentieth. The requester picks the grid because only they know
+the layout, and guessing it wrong wastes their escrow.
+
 For surveys, the requester uploads a PDF (parsed in the browser) or pastes
 text, and it is split into questions they can edit before posting — a heuristic
 will sometimes be wrong, and silently posting a mangled survey wastes both the
