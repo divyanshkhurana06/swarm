@@ -62,9 +62,10 @@ export async function POST(req: Request) {
   if (!action) {
     return NextResponse.json({ error: "Missing action" }, { status: 400 });
   }
-  // Registration is a single WebAuthn ceremony and carries no assertion;
-  // everything else must be signed.
-  if (action !== "register" && !sig) {
+  // Registration is a single WebAuthn ceremony and carries no assertion, and
+  // the embedded-wallet actions carry a plain secp256k1 signature instead.
+  const passkeyActions = ["label", "withdraw"];
+  if (passkeyActions.includes(action) && !sig) {
     return NextResponse.json({ error: "Missing sig" }, { status: 400 });
   }
 
@@ -99,6 +100,38 @@ export async function POST(req: Request) {
           abi: taskPoolAbi,
           functionName: "submitLabel",
           args: [BigInt(taskId), BigInt(itemId), Number(answer), workerId, toSig(sig!)],
+        });
+        break;
+      }
+
+      case "labelFor": {
+        const { taskId, itemId, answer, worker, signature } = body as unknown as {
+          taskId: string;
+          itemId: string;
+          answer: number;
+          worker: Hex;
+          signature: Hex;
+        };
+        hash = await wallet.writeContract({
+          address: TASK_POOL,
+          abi: taskPoolAbi,
+          functionName: "submitLabelFor",
+          args: [BigInt(taskId), BigInt(itemId), Number(answer), worker, signature],
+        });
+        break;
+      }
+
+      case "withdrawFor": {
+        const { worker, to, signature } = body as unknown as {
+          worker: Hex;
+          to: Hex;
+          signature: Hex;
+        };
+        hash = await wallet.writeContract({
+          address: TASK_POOL,
+          abi: taskPoolAbi,
+          functionName: "withdrawFor",
+          args: [worker, to, signature],
         });
         break;
       }

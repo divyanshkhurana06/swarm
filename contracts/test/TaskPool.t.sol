@@ -138,6 +138,89 @@ contract TaskPoolTest is Test {
     }
 
     // ---------------------------------------------------------------------
+    // Embedded wallets (Google sign-in). Same ledger, different proof.
+    // ---------------------------------------------------------------------
+
+    uint256 internal constant WALLET_PK = 0xA11CE;
+
+    function _signEoa(bytes32 digest) internal pure returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(WALLET_PK, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function test_EmbeddedWallet_EarnsWithoutRegistering() public {
+        address wallet = vm.addr(WALLET_PK);
+
+        // No registration ceremony: a social login has nothing to hang one off,
+        // so the address is the identity from the first answer.
+        pool.submitLabelFor(taskId, 0, 1, wallet, _signEoa(pool.labelDigest(taskId, 0, 1)));
+
+        bytes32 id = pool.idOfAddress(wallet);
+        assertTrue(pool.isRegistered(id), "first answer registers the worker");
+        assertEq(pool.earned(id), REWARD);
+        assertEq(pool.workerCount(), 2, "passkey worker from setUp, plus this one");
+    }
+
+    function test_EmbeddedWallet_SharesLedgerWithPasskeyWorkers() public {
+        address wallet = vm.addr(WALLET_PK);
+        for (uint256 i = 0; i < 10; i++) {
+            pool.submitLabelFor(taskId, i, 1, wallet, _signEoa(pool.labelDigest(taskId, i, 1)));
+        }
+        _label(taskId, 20, 1); // passkey worker
+
+        assertEq(pool.totalLabels(), 11, "one pool, one set of totals");
+
+        address cashOut = address(0xCA5);
+        uint256 receiptId = pool.withdrawFor(wallet, cashOut, _signEoa(pool.withdrawDigest(wallet, cashOut)));
+
+        assertEq(usd.balanceOf(cashOut), REWARD * 10);
+        assertEq(pool.receipts().ownerOf(receiptId), cashOut, "same receipt NFT either way");
+    }
+
+    function test_RevertWhen_EmbeddedWalletSignatureIsForAnotherAnswer() public {
+        address wallet = vm.addr(WALLET_PK);
+        // Signed "flag item 0", submitted as "fine on item 0".
+        bytes memory sig = _signEoa(pool.labelDigest(taskId, 0, 1));
+
+        vm.expectRevert(TaskPool.BadSignature.selector);
+        pool.submitLabelFor(taskId, 0, 0, wallet, sig);
+    }
+
+    function test_RevertWhen_EmbeddedWalletSignatureIsFromSomeoneElse() public {
+        address wallet = vm.addr(WALLET_PK);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(0xB0B, pool.labelDigest(taskId, 0, 1));
+
+        vm.expectRevert(TaskPool.BadSignature.selector);
+        pool.submitLabelFor(taskId, 0, 1, wallet, abi.encodePacked(r, s, v));
+    }
+
+    function test_RevertWhen_EmbeddedWalletWithdrawalIsReplayed() public {
+        address wallet = vm.addr(WALLET_PK);
+        for (uint256 i = 0; i < 10; i++) {
+            pool.submitLabelFor(taskId, i, 1, wallet, _signEoa(pool.labelDigest(taskId, i, 1)));
+        }
+
+        address cashOut = address(0xCA5);
+        bytes memory sig = _signEoa(pool.withdrawDigest(wallet, cashOut));
+        pool.withdrawFor(wallet, cashOut, sig);
+
+        for (uint256 i = 10; i < 20; i++) {
+            pool.submitLabelFor(taskId, i, 1, wallet, _signEoa(pool.labelDigest(taskId, i, 1)));
+        }
+
+        vm.expectRevert(TaskPool.BadSignature.selector);
+        pool.withdrawFor(wallet, cashOut, sig);
+    }
+
+    function test_WorkerIdsCannotCollideAcrossAuthMethods() public view {
+        // Passkey ids are keccak256 of a public key; wallet ids are a padded
+        // address. They share one ledger, so they must not overlap.
+        bytes32 walletId = pool.idOfAddress(vm.addr(WALLET_PK));
+        assertEq(uint256(walletId) >> 160, 0, "wallet ids occupy the low 160 bits");
+        assertTrue(workerId != walletId);
+    }
+
+    // ---------------------------------------------------------------------
     // The security properties that actually matter
     // ---------------------------------------------------------------------
 

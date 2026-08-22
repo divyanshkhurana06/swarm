@@ -17,13 +17,8 @@ import {
   DUSD_DECIMALS,
   explorerTx,
 } from "@/lib/contracts";
-import {
-  loadIdentity,
-  serializeSignature,
-  sign,
-  withdrawChallenge,
-  type Identity,
-} from "@/lib/passkey";
+import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { signWithdraw, type SigningWallet } from "@/lib/wallet";
 
 /**
  * Cash out.
@@ -39,7 +34,13 @@ import {
 const publicClient = createPublicClient({ chain, transport: http() });
 
 export default function Withdraw() {
-  const [identity, setIdentity] = useState<Identity | null>(null);
+  const { authenticated } = usePrivy();
+  const { wallets } = useWallets();
+  const wallet = wallets.find((w) => w.walletClientType === "privy") ?? wallets[0];
+  const address = wallet?.address as Hex | undefined;
+  const workerId = address
+    ? (`0x${"0".repeat(24)}${address.slice(2)}`.toLowerCase() as Hex)
+    : undefined;
   const [balance, setBalance] = useState<bigint>(0n);
   const [nonce, setNonce] = useState<bigint>(0n);
   const [minimum, setMinimum] = useState<bigint>(50_000n);
@@ -51,11 +52,7 @@ export default function Withdraw() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setIdentity(loadIdentity());
-  }, []);
-
-  useEffect(() => {
-    if (!identity) return;
+    if (!workerId) return;
     // The nonce is fetched here rather than inside the click handler on
     // purpose: iOS consumes the user gesture across an await, so any network
     // round trip before navigator.credentials.get() makes Face ID fail with
@@ -67,13 +64,13 @@ export default function Withdraw() {
           address: TASK_POOL,
           abi: taskPoolAbi,
           functionName: "balanceOf",
-          args: [identity.workerId],
+          args: [workerId],
         }),
         publicClient.readContract({
           address: TASK_POOL,
           abi: taskPoolAbi,
           functionName: "nonces",
-          args: [identity.workerId],
+          args: [workerId],
         }),
         publicClient.readContract({
           address: TASK_POOL,
@@ -91,10 +88,10 @@ export default function Withdraw() {
     sync();
     const t = setInterval(sync, 5000);
     return () => clearInterval(t);
-  }, [identity]);
+  }, [workerId]);
 
   const withdraw = useCallback(async () => {
-    if (!identity) return;
+    if (!workerId) return;
     const destination = to.trim();
 
     if (!isAddress(destination)) {
@@ -116,10 +113,11 @@ export default function Withdraw() {
       // Face ID first, with no await before it -- see the note on the nonce
       // fetch above. The nonce is part of the challenge, so a withdrawal
       // signature cannot be replayed to drain the balance twice.
-      setStatus("Confirm with Face ID…");
-      const sig = await sign(
-        withdrawChallenge(destination as Hex, nonce),
-        identity.credentialId
+      setStatus("Approve in your wallet…");
+      const signature = await signWithdraw(
+        wallet as unknown as SigningWallet,
+        destination as Hex,
+        nonce
       );
 
       setStatus("Sending…");
@@ -127,10 +125,10 @@ export default function Withdraw() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          action: "withdraw",
-          workerId: identity.workerId,
+          action: "withdrawFor",
+          worker: address,
           to: destination,
-          sig: serializeSignature(sig),
+          signature,
         }),
       });
       const json = await res.json();
@@ -165,7 +163,7 @@ export default function Withdraw() {
     } finally {
       setBusy(false);
     }
-  }, [identity, to, balance]);
+  }, [wallet, address, to, balance, minimum, nonce]);
 
   const money = (v: bigint) => `$${formatUnits(v, DUSD_DECIMALS)}`;
 
@@ -175,10 +173,9 @@ export default function Withdraw() {
         ← Back to earning
       </Link>
 
-      {!identity ? (
+      {!authenticated || !address ? (
         <p className="text-zinc-400">
-          No passkey on this device yet. Head back and answer a few questions
-          first.
+          Not signed in. Head back and answer a few questions first.
         </p>
       ) : done ? (
         <div className="flex-1 flex flex-col justify-center gap-4 text-center">
@@ -236,7 +233,8 @@ export default function Withdraw() {
             <p className="text-xs leading-relaxed text-zinc-600">
               Any address works — a wallet, an exchange deposit address, a
               friend&apos;s. You never needed one to earn; you only need one to
-              cash out. You&apos;ll also get a receipt NFT at the same address,
+              cash out. It defaults to your own wallet. You&apos;ll also get a
+              receipt NFT at the same address,
               which shows up in a wallet without importing anything.
             </p>
           </div>

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {WebAuthn} from "./WebAuthn.sol";
+import {EIP712} from "./EIP712.sol";
 import {WorkReceipt} from "./WorkReceipt.sol";
 
 interface IERC20 {
@@ -223,14 +224,22 @@ contract TaskPool {
         bytes32 workerId,
         WebAuthn.Signature calldata sig
     ) external {
-        Task storage t = _tasks[taskId];
-        if (!t.open) revert TaskNotOpen();
         if (!isRegistered[workerId]) revert NotRegistered();
-        if (hasLabeled[taskId][workerId][itemId]) revert AlreadyLabeled();
 
         if (!WebAuthn.verify(labelChallenge(taskId, itemId, answer), sig, _pubkeys[workerId])) {
             revert BadSignature();
         }
+
+        _credit(taskId, itemId, answer, workerId);
+    }
+
+    /// @dev Accounting shared by both authentication paths. Whether a worker
+    ///      proved themselves with a passkey or an embedded wallet changes
+    ///      nothing about what they are owed.
+    function _credit(uint256 taskId, uint256 itemId, uint8 answer, bytes32 workerId) private {
+        Task storage t = _tasks[taskId];
+        if (!t.open) revert TaskNotOpen();
+        if (hasLabeled[taskId][workerId][itemId]) revert AlreadyLabeled();
 
         uint256 reward = t.rewardPerLabel;
         if (t.funded - t.paidOut < reward) revert PoolExhausted();
@@ -263,13 +272,18 @@ contract TaskPool {
     {
         if (!isRegistered[workerId]) revert NotRegistered();
 
-        uint256 amount = earned[workerId] - withdrawn[workerId];
-        if (amount == 0) revert NothingToWithdraw();
-        if (amount < MIN_WITHDRAWAL) revert BelowMinimum();
-
         if (!WebAuthn.verify(withdrawChallenge(workerId, to), sig, _pubkeys[workerId])) {
             revert BadSignature();
         }
+
+        return _settle(workerId, to);
+    }
+
+    /// @dev Payout shared by both authentication paths.
+    function _settle(bytes32 workerId, address to) private returns (uint256 receiptId) {
+        uint256 amount = earned[workerId] - withdrawn[workerId];
+        if (amount == 0) revert NothingToWithdraw();
+        if (amount < MIN_WITHDRAWAL) revert BelowMinimum();
 
         unchecked {
             nonces[workerId]++;
@@ -279,6 +293,91 @@ contract TaskPool {
 
         receiptId = receipts.mint(to, amount, answersBy[workerId]);
         emit Withdrawn(workerId, to, amount, receiptId);
+    }
+
+    // ---------------------------------------------------------------------
+    // Embedded-wallet workers (Google sign-in via Privy)
+    //
+    // A passkey is not the only way to be a person here. A social login backed
+    // by an embedded wallet signs ordinary secp256k1 typed data, which needs no
+    // registration ceremony at all: the address *is* the identity, so there is
+    // nothing to look up and nothing to recover.
+    //
+    // Both paths share one ledger. `earned`, `withdrawn` and the receipt NFT do
+    // not care how a worker proved they were themselves.
+    // ---------------------------------------------------------------------
+
+    bytes32 private constant LABEL_TYPEHASH =
+        keccak256("Label(uint256 taskId,uint256 itemId,uint8 answer)");
+    bytes32 private constant WITHDRAW_TYPEHASH =
+        keccak256("Withdraw(address to,uint256 nonce)");
+
+    /// @notice Worker id for an address-based identity.
+    /// @dev Left-padded address, so it can never collide with a passkey id
+    ///      (keccak256 of a public key) in the shared ledger.
+    function idOfAddress(address worker) public pure returns (bytes32) {
+        return bytes32(uint256(uint160(worker)));
+    }
+
+    function domainSeparator() public view returns (bytes32) {
+        return EIP712.domainSeparator("Swarm", "1");
+    }
+
+    function labelDigest(uint256 taskId, uint256 itemId, uint8 answer)
+        public
+        view
+        returns (bytes32)
+    {
+        return EIP712.digest(
+            domainSeparator(), keccak256(abi.encode(LABEL_TYPEHASH, taskId, itemId, answer))
+        );
+    }
+
+    function withdrawDigest(address worker, address to) public view returns (bytes32) {
+        return EIP712.digest(
+            domainSeparator(),
+            keccak256(abi.encode(WITHDRAW_TYPEHASH, to, nonces[idOfAddress(worker)]))
+        );
+    }
+
+    /// @notice Submit an answer signed by an embedded wallet.
+    /// @dev The worker is registered lazily on their first answer; a social
+    ///      login has no separate registration step to hang it off.
+    function submitLabelFor(
+        uint256 taskId,
+        uint256 itemId,
+        uint8 answer,
+        address worker,
+        bytes calldata signature
+    ) external {
+        if (worker == address(0)) revert NotRegistered();
+        if (EIP712.recover(labelDigest(taskId, itemId, answer), signature) != worker) {
+            revert BadSignature();
+        }
+
+        bytes32 workerId = idOfAddress(worker);
+        if (!isRegistered[workerId]) {
+            isRegistered[workerId] = true;
+            unchecked {
+                workerCount++;
+            }
+            emit WorkerRegistered(workerId, uint256(uint160(worker)), 0);
+        }
+
+        _credit(taskId, itemId, answer, workerId);
+    }
+
+    /// @notice Cash out to any address, authorised by the embedded wallet.
+    function withdrawFor(address worker, address to, bytes calldata signature)
+        external
+        returns (uint256 receiptId)
+    {
+        bytes32 workerId = idOfAddress(worker);
+        if (!isRegistered[workerId]) revert NotRegistered();
+        if (EIP712.recover(withdrawDigest(worker, to), signature) != worker) {
+            revert BadSignature();
+        }
+        return _settle(workerId, to);
     }
 
     // ---------------------------------------------------------------------
