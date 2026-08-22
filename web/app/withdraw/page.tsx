@@ -39,7 +39,7 @@ export default function Page() {
 }
 
 function Withdraw() {
-  const { authenticated } = usePrivy();
+  const { authenticated, exportWallet } = usePrivy();
   const { wallets } = useWallets();
   const wallet = wallets.find((w) => w.walletClientType === "privy") ?? wallets[0];
   const address = wallet?.address as Hex | undefined;
@@ -297,6 +297,31 @@ function Withdraw() {
             {error}
           </div>
         )}
+
+        {/*
+          The escape hatch that makes this the worker's wallet rather than
+          ours. Without an export, an embedded wallet only works inside this
+          app -- which is fine until the day someone wants to leave, and that
+          is exactly when "you own it" has to be true.
+        */}
+        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
+          <div className="text-sm font-medium">Take it with you</div>
+          <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+            This wallet is yours. Export the private key and import it into
+            MetaMask or any other wallet to use the funds anywhere — you are not
+            locked to this app.
+          </p>
+          <button
+            onClick={() => exportWallet()}
+            className="mt-3 w-full rounded-xl border border-zinc-700 py-2.5 text-sm font-medium"
+          >
+            Export private key
+          </button>
+          <p className="mt-2 text-[11px] leading-relaxed text-zinc-600">
+            Anyone with that key controls the wallet. Don&apos;t paste it
+            anywhere but a wallet app.
+          </p>
+        </div>
       </div>
     </Shell>
   );
