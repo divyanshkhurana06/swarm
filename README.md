@@ -145,16 +145,4 @@ The contract tests do not mock the signature layer. `script/webauthn.js` builds 
 - **The challenge is located in `clientDataJSON` by byte offset**, and the preceding `"challenge":"` key is checked, so a matching string cannot be smuggled in via `origin` or any other field.
 - **The relayer is untrusted by design.** It pays gas and nothing else.
 
-## Honest limitations
 
-Things a demo should not pretend to have solved:
-
-- **No fiat off-ramp.** Workers earn a stablecoin. Turning that into rupees still means an exchange and KYC. That is a partner integration, and it is the single biggest thing between this and a real product.
-- **No proof of personhood.** Passkeys are free and unlimited, so one person can hold many worker identities. Consensus-based quality control (an answer pays only when N workers independently agree) is designed but not implemented — right now every submitted answer pays.
-- **Registration is unauthenticated.** iOS consumes the user gesture on a WebAuthn ceremony, so calling `credentials.create()` and then `credentials.get()` to prove possession fails with `NotAllowedError` on real phones. Registration is therefore a single ceremony and the public key is taken as given. No funds are at risk — every later action still needs a signature from the matching private key — but somebody could register a victim's public key against their own credential hash and disrupt that victim's recovery lookup. The fix is a two-step flow with a second, separately-gestured tap.
-- **One relayer key.** Nonces are serialised in-process, which is enough for a room. Past a few hundred transactions per minute this needs a pool of keys.
-- **`DemoUSD` has an open mint.** It is a testnet stand-in. On mainnet it is replaced by real USDC and nothing else about `TaskPool` changes.
-
-## License
-
-MIT
