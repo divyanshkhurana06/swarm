@@ -221,6 +221,21 @@ export async function POST(req: Request) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`relay ${action} failed:`, message);
+
+    // The relayer paying for everyone is a single point of failure, and
+    // "execution reverted" tells a worker nothing about whose problem it is.
+    if (/insufficient (balance|funds)/i.test(message)) {
+      const balance = await publicClient.getBalance({ address: account.address });
+      return NextResponse.json(
+        {
+          error:
+            `The relayer is out of gas (${(Number(balance) / 1e18).toFixed(4)} MON left). ` +
+            `Top up ${account.address} to keep the demo running.`,
+        },
+        { status: 503 }
+      );
+    }
+
     return NextResponse.json({ error: message.split("\n")[0] }, { status: 500 });
   }
 }

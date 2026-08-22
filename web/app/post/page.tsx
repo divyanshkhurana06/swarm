@@ -8,7 +8,7 @@ import { DUSD_DECIMALS, explorerTx } from "@/lib/contracts";
 import { signPostTask, type SigningWallet } from "@/lib/wallet";
 import { publicClient, tasksBy, type Task } from "@/lib/tasks";
 import { extractPdfText, looksLikeQuestion, splitIntoQuestions } from "@/lib/survey";
-import { prepareImage, MAX_BYTES_PER_IMAGE } from "@/lib/images";
+import { prepareImage, estimateGas, MAX_BYTES_PER_IMAGE } from "@/lib/images";
 import { Shell, Field, Input, WalletBar } from "@/components/ui";
 
 /**
@@ -529,7 +529,13 @@ function PostTask() {
           value={String(items.length)}
         />
         {kind === "bbox" && specBytes > 0 && (
-          <Row label="Stored on-chain" value={`${Math.round(specBytes / 1000)} KB`} />
+          <>
+            <Row label="Stored on-chain" value={`${Math.round(specBytes / 1000)} KB`} />
+            <Row
+              label="Gas to post"
+              value={`~${(estimateGas(specBytes) * 102e-9).toFixed(2)} MON`}
+            />
+          </>
         )}
         <Row
           label="Escrowed now"

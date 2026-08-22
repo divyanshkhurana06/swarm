@@ -12,13 +12,25 @@
  */
 
 /** Longest edge, in pixels, of a stored image. */
-const MAX_EDGE = 384;
+const MAX_EDGE = 320;
 
 /** JPEG quality. Below ~0.5 boxes get hard to place accurately. */
-const QUALITY = 0.55;
+const QUALITY = 0.5;
 
 /** Refuse anything that would blow up the post transaction. */
-export const MAX_BYTES_PER_IMAGE = 24_000;
+export const MAX_BYTES_PER_IMAGE = 14_000;
+
+/**
+ * Roughly what it costs to put bytes into contract storage.
+ *
+ * One SSTORE per 32-byte word, plus calldata. Worth showing a requester
+ * before they sign: at ~1.4 MON for a single 21KB photo, on-chain image
+ * storage is a demo affordance, not an architecture.
+ */
+export function estimateGas(bytes: number): number {
+  const words = Math.ceil(bytes / 32);
+  return words * 20_000 + bytes * 16 + 200_000;
+}
 
 export type PreparedImage = {
   dataUri: string;
