@@ -9,3 +9,7 @@ broadcast/
 *.tsbuildinfo
 .DS_Store
 contracts/.env
+
+.claude/
+AGENTS.md
+CLAUDE.md
