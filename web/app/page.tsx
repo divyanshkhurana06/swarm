@@ -274,7 +274,7 @@ function Worker() {
           setCursor((c) => c + 1);
           setText("");
         } else if (/ItemFull/i.test(message)) {
-          setError("Someone else just took that one — moving on.");
+          setError("Someone else just took that one. Moving on.");
           setCursor((c) => c + 1);
           setText("");
         } else {
@@ -305,17 +305,17 @@ function Worker() {
           <div>
             <h1 className="text-4xl font-semibold tracking-tight">Swarm</h1>
             <p className="mt-3 text-lg text-zinc-400 leading-snug">
-              Label data for a few seconds. Get paid instantly, on-chain.
+              Label data for a few seconds. Get paid instantly, on chain.
             </p>
           </div>
           <ul className="space-y-2.5 text-zinc-400">
             {[
-              "Sign in with Google — that's the whole signup.",
+              "Sign in with Google. That's the whole signup.",
               "A wallet is created for you. No seed phrase, ever.",
-              "Every answer is paid on-chain, to you.",
+              "Every answer is paid on chain, to you.",
             ].map((line) => (
               <li key={line} className="flex gap-3">
-                <span className="text-emerald-400">—</span>
+                <span className="text-emerald-400">·</span>
                 {line}
               </li>
             ))}
@@ -691,7 +691,7 @@ function Finished({
           ? survey?.paid
             ? "You were paid for the whole response."
             : "You've answered everything available on this one."
-          : `You've earned ${money(earned)} in total, already on-chain.`}
+          : `You've earned ${money(earned)} in total, already on chain.`}
       </p>
 
       <button
@@ -720,7 +720,7 @@ function ModeBadge({ task }: { task: Task }) {
 function Footer() {
   return (
     <footer className="text-center text-xs text-zinc-700">
-      Paid in DUSD on {chain.name} · every answer signed by you, verified on-chain
+      Paid in DUSD on {chain.name} · every answer signed by you, verified on chain
     </footer>
   );
 }

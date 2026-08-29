@@ -4,7 +4,7 @@
 
 A requester pastes what they need labelled and signs once. The task goes on-chain. A worker signs in with Google, answers, and is paid per answer. Neither side needs gas, tokens, or a seed phrase.
 
-Built at [Monad Blitz Hyderabad V3](https://blitz.devnads.com/events/monad-blitz-hyderabad-v3).
+**Winner of Monad Blitz Hackathon V3.** Built at [Monad Blitz Hyderabad V3](https://blitz.devnads.com/events/monad-blitz-hyderabad-v3).
 
 - **Live app:** **https://swarm-rouge-one.vercel.app**
 - **Post a task:** https://swarm-rouge-one.vercel.app/post
