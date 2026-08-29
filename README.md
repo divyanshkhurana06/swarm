@@ -1,12 +1,13 @@
 # Swarm
 
-**A data-labelling market where every answer is paid the moment it is given — on-chain, for a fraction of a cent, with no wallet and no signup on either side.**
+**A data labelling market where every answer is paid the moment it is given — on-chain, for a fraction of a cent, with no wallet and no signup on either side.**
 
 A requester pastes what they need labelled and signs once. The task goes on-chain. A worker signs in with Google, answers, and is paid per answer. Neither side needs gas, tokens, or a seed phrase.
 
 **Winner of Monad Blitz Hackathon V3.** Built at [Monad Blitz Hyderabad V3](https://blitz.devnads.com/events/monad-blitz-hyderabad-v3).
 
 - **Live app:** **https://swarm-rouge-one.vercel.app**
+- **Demo** https://www.tella.tv/video/introducing-swarm-at-monad-hyderabad-3q25
 - **Post a task:** https://swarm-rouge-one.vercel.app/post
 - **Projector dashboard:** https://swarm-rouge-one.vercel.app/dashboard
 - **TaskPool (Monad Testnet):** [`0x74F2b1C5eCb400c31596dC5CA993f909F083A6d0`](https://testnet.monadvision.com/address/0x74F2b1C5eCb400c31596dC5CA993f909F083A6d0) — verified
