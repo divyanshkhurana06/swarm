@@ -1,6 +1,6 @@
 # Swarm
 
-**A data labelling market where every answer is paid the moment it is given — on-chain, for a fraction of a cent, with no wallet and no signup on either side.**
+**A data labelling market where every answer is paid the moment it is given on chain, for a fraction of a cent, with no wallet and no signup on either side.**
 
 A requester pastes what they need labelled and signs once. The task goes on-chain. A worker signs in with Google, answers, and is paid per answer. Neither side needs gas, tokens, or a seed phrase.
 
